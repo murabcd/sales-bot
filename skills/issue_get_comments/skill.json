@@ -1,0 +1,5 @@
+{
+	"name": "issue_get_comments",
+	"description": "Fetch all comments for an issue.",
+	"tool": "yandex-tracker.issue_get_comments"
+}

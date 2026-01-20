@@ -1,0 +1,5 @@
+{
+	"name": "issue_update",
+	"description": "Update an existing issue.",
+	"tool": "yandex-tracker.issue_update"
+}

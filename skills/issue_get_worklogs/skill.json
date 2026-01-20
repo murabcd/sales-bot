@@ -1,0 +1,5 @@
+{
+	"name": "issue_get_worklogs",
+	"description": "Retrieve worklog entries for issues.",
+	"tool": "yandex-tracker.issue_get_worklogs"
+}

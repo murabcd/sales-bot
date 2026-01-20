@@ -1,0 +1,9 @@
+{
+	"name": "queues_get_all",
+	"description": "List all available Yandex Tracker queues.",
+	"tool": "yandex-tracker.queues_get_all",
+	"args": {
+		"fields": ["key", "name"],
+		"per_page": 100
+	}
+}

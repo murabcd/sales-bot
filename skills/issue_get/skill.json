@@ -1,0 +1,5 @@
+{
+	"name": "issue_get",
+	"description": "Retrieve detailed issue information by ID.",
+	"tool": "yandex-tracker.issue_get"
+}

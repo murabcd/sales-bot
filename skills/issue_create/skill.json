@@ -1,0 +1,5 @@
+{
+	"name": "issue_create",
+	"description": "Create a new issue in a queue.",
+	"tool": "yandex-tracker.issue_create"
+}

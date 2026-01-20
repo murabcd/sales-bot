@@ -1,0 +1,5 @@
+{
+	"name": "queue_get_versions",
+	"description": "Get all versions for a specific queue.",
+	"tool": "yandex-tracker.queue_get_versions"
+}

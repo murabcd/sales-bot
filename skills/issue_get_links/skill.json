@@ -1,0 +1,5 @@
+{
+	"name": "issue_get_links",
+	"description": "Get related issue links.",
+	"tool": "yandex-tracker.issue_get_links"
+}

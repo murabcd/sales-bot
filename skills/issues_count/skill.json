@@ -1,0 +1,5 @@
+{
+	"name": "issues_count",
+	"description": "Count issues matching a query.",
+	"tool": "yandex-tracker.issues_count"
+}

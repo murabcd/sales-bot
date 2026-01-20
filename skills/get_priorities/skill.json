@@ -1,0 +1,5 @@
+{
+	"name": "get_priorities",
+	"description": "Get all available issue priorities.",
+	"tool": "yandex-tracker.get_priorities"
+}

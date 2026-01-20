@@ -1,0 +1,5 @@
+{
+	"name": "issue_get_checklist",
+	"description": "Get checklist items of an issue.",
+	"tool": "yandex-tracker.issue_get_checklist"
+}

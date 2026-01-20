@@ -1,0 +1,5 @@
+{
+	"name": "user_get_current",
+	"description": "Get information about the current authenticated user.",
+	"tool": "yandex-tracker.user_get_current"
+}

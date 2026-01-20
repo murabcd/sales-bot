@@ -1,0 +1,5 @@
+{
+	"name": "queue_get_fields",
+	"description": "Get fields for a specific queue.",
+	"tool": "yandex-tracker.queue_get_fields"
+}

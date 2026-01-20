@@ -1,0 +1,5 @@
+{
+	"name": "get_global_fields",
+	"description": "Get all global fields available in Yandex Tracker.",
+	"tool": "yandex-tracker.get_global_fields"
+}

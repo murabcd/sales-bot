@@ -1,0 +1,5 @@
+{
+	"name": "issue_get_attachments",
+	"description": "Get attachments for an issue.",
+	"tool": "yandex-tracker.issue_get_attachments"
+}

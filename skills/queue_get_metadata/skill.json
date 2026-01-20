@@ -1,0 +1,5 @@
+{
+	"name": "queue_get_metadata",
+	"description": "Get detailed metadata about a specific queue.",
+	"tool": "yandex-tracker.queue_get_metadata"
+}

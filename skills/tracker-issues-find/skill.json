@@ -1,0 +1,9 @@
+{
+	"name": "tracker-issues-find",
+	"description": "Search Yandex Tracker issues by query.",
+	"tool": "yandex-tracker.issues_find",
+	"args": {
+		"fields": ["key", "summary", "created_at"],
+		"per_page": 50
+	}
+}

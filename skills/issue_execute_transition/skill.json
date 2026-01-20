@@ -1,0 +1,5 @@
+{
+	"name": "issue_execute_transition",
+	"description": "Execute a status transition for an issue.",
+	"tool": "yandex-tracker.issue_execute_transition"
+}

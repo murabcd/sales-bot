@@ -1,0 +1,5 @@
+{
+	"name": "users_get_all",
+	"description": "Get information about user accounts registered in the organization.",
+	"tool": "yandex-tracker.users_get_all"
+}

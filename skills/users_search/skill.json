@@ -1,0 +1,5 @@
+{
+	"name": "users_search",
+	"description": "Search user by login, email, or real name.",
+	"tool": "yandex-tracker.users_search"
+}

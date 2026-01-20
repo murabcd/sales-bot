@@ -1,0 +1,5 @@
+{
+	"name": "issue_close",
+	"description": "Close an issue with a resolution.",
+	"tool": "yandex-tracker.issue_close"
+}

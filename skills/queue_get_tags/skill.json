@@ -1,0 +1,5 @@
+{
+	"name": "queue_get_tags",
+	"description": "Get all tags for a specific queue.",
+	"tool": "yandex-tracker.queue_get_tags"
+}

@@ -1,0 +1,5 @@
+{
+	"name": "user_get",
+	"description": "Get information about a specific user by login or UID.",
+	"tool": "yandex-tracker.user_get"
+}
