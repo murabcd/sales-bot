@@ -15,6 +15,7 @@ import {
 import { type CandidateIssue, getChatState } from "./lib/context/chat-state.js";
 import {
 	appendHistoryMessage,
+	clearHistoryMessages,
 	formatHistoryForPrompt,
 	loadHistoryMessages,
 } from "./lib/context/session-history.js";
@@ -28,7 +29,7 @@ import {
 import { loadModelsConfig, normalizeModelRef, selectModel } from "./models.js";
 import { loadSkills, resolveToolRef } from "./skills.js";
 
-dotenv.config({ path: ".env.bot" });
+dotenv.config();
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TRACKER_TOKEN = process.env.TRACKER_TOKEN;
@@ -934,20 +935,24 @@ const START_GREETING =
 	"Задайте вопрос обычным текстом — отвечу по задаче, статусу или итогам\n\n" +
 	"Если есть номер задачи, укажите его, например PROJ-1234";
 
-bot.command("start", (ctx) =>
-	sendText(ctx, START_GREETING, { reply_markup: startKeyboard }),
-);
+bot.command("start", (ctx) => {
+	const chatId = ctx.chat?.id?.toString() ?? ctx.from?.id?.toString() ?? "";
+	if (chatId) {
+		clearHistoryMessages(SESSION_DIR, chatId);
+	}
+	return sendText(ctx, START_GREETING, { reply_markup: startKeyboard });
+});
 
 async function handleHelp(ctx: { reply: (text: string) => Promise<unknown> }) {
 	await sendText(
 		ctx,
 		"Команды:\n" +
 			"/tools - список MCP инструментов Yandex Tracker\n" +
+			"/model - текущая модель (list|set <ref>)\n" +
+			"/model reasoning off|low|standard|high\n" +
 			"/tracker <tool> <json> - вызвать инструмент с JSON аргументами\n\n" +
 			"Можно просто спросить, например:\n" +
-			'"Делали интеграцию с ЦИАН?"\n\n' +
-			"Пример:\n" +
-			'/tracker issues.search {"query":"Assignee: me"}',
+			'"Делали интеграцию с ЦИАН?"',
 	);
 }
 

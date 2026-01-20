@@ -51,10 +51,37 @@ export async function loadSkills(baseDir = "skills"): Promise<RuntimeSkill[]> {
 		throw error;
 	}
 
-	const skills: RuntimeSkill[] = [];
+	const pendingDirs: string[] = [];
 	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		const skillPath = path.join(skillsDir, entry.name, "skill.json");
+		if (entry.isDirectory()) {
+			pendingDirs.push(path.join(skillsDir, entry.name));
+		}
+	}
+
+	const skillFiles: string[] = [];
+	while (pendingDirs.length) {
+		const dir = pendingDirs.pop();
+		if (!dir) continue;
+		let dirEntries: Array<Dirent> = [];
+		try {
+			dirEntries = await fs.readdir(dir, { withFileTypes: true });
+		} catch (error) {
+			console.warn(`[skills] Failed to read ${dir}:`, error);
+			continue;
+		}
+		for (const entry of dirEntries) {
+			if (entry.isDirectory()) {
+				pendingDirs.push(path.join(dir, entry.name));
+				continue;
+			}
+			if (entry.isFile() && entry.name === "skill.json") {
+				skillFiles.push(path.join(dir, entry.name));
+			}
+		}
+	}
+
+	const skills: RuntimeSkill[] = [];
+	for (const skillPath of skillFiles) {
 		let raw: RawSkill;
 		try {
 			const file = await fs.readFile(skillPath, "utf8");

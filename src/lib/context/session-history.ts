@@ -48,6 +48,13 @@ export function loadHistoryMessages(
 	return messages;
 }
 
+export function clearHistoryMessages(baseDir: string, chatId: string): void {
+	const filePath = resolveSessionFile(baseDir, chatId);
+	if (fs.existsSync(filePath)) {
+		fs.unlinkSync(filePath);
+	}
+}
+
 export function formatHistoryForPrompt(messages: HistoryMessage[]): string {
 	if (!messages.length) return "";
 	const lines = messages.map((msg) => {

@@ -1,4 +1,9 @@
+# dependencies
 node_modules/
-.env.bot
+
+# env files (can opt-in for committing if needed)
+.env
+
+# data
 data/sessions/
 data/test-sessions/

@@ -12,7 +12,7 @@ Telegram bot using grammY and the Model Context Protocol (MCP) to call Yandex Tr
 npm install
 ```
 
-Create a `.env.bot` file (or export env vars):
+Create a `.env` file, or export env vars:
 
 ```bash
 BOT_TOKEN=your_telegram_bot_token
@@ -85,12 +85,12 @@ mcporter call yandex-tracker.issues_find --args '{"query":"Assignee: me"}'
 ## Skills
 
 This repo uses clawdbot-style skill docs (structured knowledge + tooling notes).
-Runtime skills are loaded from `skills/*/skill.json` at startup.
+Runtime skills are loaded from `skills/**/skill.json` at startup.
 
 - `skills/mcporter/SKILL.md` - MCP CLI usage and ops workflow
 - `skills/yandex-tracker/SKILL.md` - MCP tool map and usage notes
-- `skills/tracker-issues-find/skill.json` - runtime skill example
-- `skills/tracker-issues-find/SKILL.md` - runtime skill docs and usage
+- `skills/yandex-tracker/tracker-issues-find/skill.json` - runtime skill example
+- `skills/yandex-tracker/tracker-issues-find/SKILL.md` - runtime skill docs and usage
 
 ## MCP server config example
 
