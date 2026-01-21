@@ -1,0 +1,10 @@
+name = "sales-bot"
+main = "index.ts"
+compatibility_date = "2026-01-20"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ALLOWED_TG_IDS = "187873791"
+TRACKER_CLOUD_ORG_ID = "bpfd8lkv5f11dcc2t3sj"
+OPENAI_MODEL = "openai/gpt-5.2"
+DEBUG_LOGS = "1"
