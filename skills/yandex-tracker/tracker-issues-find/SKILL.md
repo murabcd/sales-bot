@@ -5,7 +5,7 @@ description: Runtime skill to search Yandex Tracker issues by query.
 
 # tracker-issues-find
 
-Uses the MCP tool `yandex-tracker.issues_find`.
+Uses the Tracker tool `yandex-tracker.issues_find`.
 
 Defaults
 - `fields`: `key`, `summary`, `created_at`

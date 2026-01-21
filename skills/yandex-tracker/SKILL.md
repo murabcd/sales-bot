@@ -1,22 +1,20 @@
 ---
 name: yandex-tracker
-description: MCP tools map + usage notes for Yandex Tracker.
+description: Tracker tools map + usage notes for Yandex Tracker.
 ---
 
 # yandex-tracker
 
-This skill documents the MCP tools exposed by the Yandex Tracker server and how to use them via runtime skills or `mcporter`.
+This skill documents the Tracker tools exposed by the bot and how to use them via runtime skills.
 
 Quick start
-- List tools: `mcporter list yandex-tracker --schema`
-- Call a tool: `mcporter call yandex-tracker.issues_find --args '{"query":"Assignee: me"}'`
 - Telegram: `/skill <name> <json>`
 
 Runtime skills
 - Each tool can be wrapped as a runtime skill in `skills/<name>/skill.json`.
 - The `tool` field supports `yandex-tracker.<tool_name>`.
 
-Available MCP tools
+Available Tracker tools
 
 Queue Management
 - `queues_get_all`
