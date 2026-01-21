@@ -17,10 +17,10 @@
 		"@ai-sdk/react": "^3.0.43",
 		"@grammyjs/runner": "^2.0.1",
 		"@grammyjs/transformer-throttler": "^1.2.1",
+		"@supermemory/tools": "^1.0.4",
 		"ai": "^6.0.41",
 		"dotenv": "^16.4.7",
 		"grammy": "^1.21.0",
-		"mcporter": "0.7.3",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
