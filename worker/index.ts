@@ -3,6 +3,10 @@ import { createBot } from "../src/bot.js";
 
 const startTime = Date.now();
 
+type Env = Record<string, string | undefined> & {
+	UPDATES_DO: DurableObjectNamespace;
+};
+
 let botPromise: Promise<Awaited<ReturnType<typeof createBot>>["bot"]> | null =
 	null;
 
@@ -27,11 +31,7 @@ async function getBot(env: Record<string, string | undefined>) {
 }
 
 export default {
-	async fetch(
-		request: Request,
-		env: Record<string, string | undefined>,
-		ctx: ExecutionContext,
-	) {
+	async fetch(request: Request, env: Env, _ctx: ExecutionContext) {
 		const url = new URL(request.url);
 		if (url.pathname !== "/telegram") {
 			return new Response("Not found", { status: 404 });
@@ -40,12 +40,141 @@ export default {
 			return new Response("Method Not Allowed", { status: 405 });
 		}
 		const update = await request.json();
-		const bot = await getBot(env);
-		ctx.waitUntil(
-			bot.handleUpdate(update).catch((error) => {
-				console.error("telegram_update_error", error);
-			}),
-		);
+		const id = env.UPDATES_DO.idFromName("telegram-updates");
+		const stub = env.UPDATES_DO.get(id);
+		await stub.fetch("https://do/enqueue", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(update),
+		});
 		return new Response("OK", { status: 200 });
 	},
 };
+
+type QueueItem = {
+	id: string;
+	update: unknown;
+	attempt: number;
+	nextAt: number;
+};
+
+type StoredState = {
+	queue: QueueItem[];
+	processedIds: string[];
+};
+
+const MAX_ATTEMPTS = 5;
+const RETRY_BASE_MS = 1_000;
+const RETRY_MAX_MS = 60_000;
+const PROCESSED_IDS_MAX = 1_000;
+
+export class TelegramUpdatesDO implements DurableObject {
+	private state: DurableObjectState;
+	private env: Env;
+	private processing = false;
+
+	constructor(state: DurableObjectState, env: Env) {
+		this.state = state;
+		this.env = env;
+	}
+
+	async fetch(request: Request): Promise<Response> {
+		const url = new URL(request.url);
+		if (url.pathname !== "/enqueue") {
+			return new Response("Not found", { status: 404 });
+		}
+		if (request.method !== "POST") {
+			return new Response("Method Not Allowed", { status: 405 });
+		}
+		const update = await request.json();
+		await this.enqueueUpdate(update);
+		this.state.waitUntil(this.processQueue());
+		return new Response("OK", { status: 200 });
+	}
+
+	async alarm(): Promise<void> {
+		await this.processQueue();
+	}
+
+	private async loadState(): Promise<StoredState> {
+		const stored =
+			(await this.state.storage.get<StoredState>("state")) ??
+			({ queue: [], processedIds: [] } as StoredState);
+		return {
+			queue: Array.isArray(stored.queue) ? stored.queue : [],
+			processedIds: Array.isArray(stored.processedIds)
+				? stored.processedIds
+				: [],
+		};
+	}
+
+	private async saveState(state: StoredState): Promise<void> {
+		await this.state.storage.put("state", state);
+	}
+
+	private async enqueueUpdate(update: Record<string, unknown>) {
+		const state = await this.loadState();
+		const updateId =
+			typeof update?.update_id === "number"
+				? String(update.update_id)
+				: `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		if (state.processedIds.includes(updateId)) return;
+		if (state.queue.some((item) => item.id === updateId)) return;
+		state.queue.push({
+			id: updateId,
+			update,
+			attempt: 0,
+			nextAt: Date.now(),
+		});
+		await this.saveState(state);
+	}
+
+	private async processQueue(): Promise<void> {
+		if (this.processing) return;
+		this.processing = true;
+		try {
+			const bot = await getBot(this.env);
+			const state = await this.loadState();
+
+			while (state.queue.length > 0) {
+				state.queue.sort((a, b) => a.nextAt - b.nextAt);
+				const item = state.queue[0];
+				if (!item) break;
+				if (item.nextAt > Date.now()) {
+					await this.state.storage.setAlarm(item.nextAt);
+					break;
+				}
+
+				state.queue.shift();
+				try {
+					await bot.handleUpdate(item.update);
+					state.processedIds.push(item.id);
+					if (state.processedIds.length > PROCESSED_IDS_MAX) {
+						state.processedIds = state.processedIds.slice(
+							-state.processedIds.length + PROCESSED_IDS_MAX,
+						);
+					}
+					await this.saveState(state);
+				} catch (error) {
+					console.error("telegram_update_error", error);
+					item.attempt += 1;
+					if (item.attempt >= MAX_ATTEMPTS) {
+						await this.saveState(state);
+						continue;
+					}
+					const delay = Math.min(
+						RETRY_BASE_MS * 2 ** (item.attempt - 1),
+						RETRY_MAX_MS,
+					);
+					item.nextAt = Date.now() + delay;
+					state.queue.push(item);
+					await this.saveState(state);
+					await this.state.storage.setAlarm(item.nextAt);
+					break;
+				}
+			}
+		} finally {
+			this.processing = false;
+		}
+	}
+}

@@ -21,3 +21,11 @@ RELEASE_VERSION="dev"
 COMMIT_HASH="local"
 REGION="local"
 INSTANCE_ID="local"
+
+[[durable_objects.bindings]]
+name = "UPDATES_DO"
+class_name = "TelegramUpdatesDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TelegramUpdatesDO"]
