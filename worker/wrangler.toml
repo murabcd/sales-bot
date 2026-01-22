@@ -4,7 +4,14 @@ compatibility_date = "2026-01-20"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-ALLOWED_TG_IDS = "187873791"
+ALLOWED_TG_IDS=""
 TRACKER_CLOUD_ORG_ID = "bpfd8lkv5f11dcc2t3sj"
 OPENAI_MODEL = "openai/gpt-5.2"
+WEB_SEARCH_ENABLED = "1"
+WEB_SEARCH_CONTEXT_SIZE = "low"
 DEBUG_LOGS = "1"
+SERVICE_NAME = "omni"
+RELEASE_VERSION = "dev"
+COMMIT_HASH = "local"
+REGION = "local"
+INSTANCE_ID = "local"
