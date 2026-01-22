@@ -362,6 +362,7 @@ export async function createBot(options: CreateBotOptions) {
 	function isBotMentioned(ctx: BotContext) {
 		const message = ctx.message;
 		if (!message || !("text" in message)) return false;
+		if (typeof message.text !== "string") return false;
 
 		const replyToBot =
 			message.reply_to_message?.from?.id !== undefined &&
@@ -374,7 +375,10 @@ export async function createBot(options: CreateBotOptions) {
 		const entities = message.entities ?? [];
 		for (const entity of entities) {
 			if (entity.type !== "mention") continue;
-			const mention = message.text.slice(entity.offset, entity.offset + entity.length);
+			const mention = message.text.slice(
+				entity.offset,
+				entity.offset + entity.length,
+			);
 			if (mention.toLowerCase() === `@${username.toLowerCase()}`) return true;
 		}
 		return false;
@@ -1109,9 +1113,10 @@ export async function createBot(options: CreateBotOptions) {
 
 	const START_GREETING =
 		"Привет!\n\n" +
-		"Я Omni, ассистент по Yandex Tracker\n\n" +
-		"Задайте вопрос обычным текстом — отвечу по задаче, статусу или итогам\n\n" +
-		"Если есть номер задачи, укажите его, например PROJ-1234";
+		"Я Omni, ассистент по Yandex Tracker.\n" +
+		"Отвечаю по задачам, статусам и итогам, могу искать в интернете.\n" +
+		"Можно писать текстом или голосом.\n" +
+		"Если есть номер задачи — укажите его, например PROJ-1234.";
 
 	bot.command("start", (ctx) => {
 		setLogContext(ctx, { command: "/start", message_type: "command" });
@@ -1555,6 +1560,11 @@ export async function createBot(options: CreateBotOptions) {
 		if (!text || text.startsWith("/")) {
 			return;
 		}
+		const replyToMessageId = ctx.message?.message_id;
+		const replyOptions = replyToMessageId
+			? { reply_to_message_id: replyToMessageId }
+			: undefined;
+		const sendReply = (message: string) => sendText(ctx, message, replyOptions);
 
 		try {
 			await ctx.replyWithChatAction("typing");
@@ -1577,11 +1587,6 @@ export async function createBot(options: CreateBotOptions) {
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
-			const replyToMessageId = ctx.message?.message_id;
-			const replyOptions = replyToMessageId
-				? { reply_to_message_id: replyToMessageId }
-				: undefined;
-			const sendReply = (message: string) => sendText(ctx, message, replyOptions);
 			const historyMessages =
 				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
 					? await loadHistoryMessages(
