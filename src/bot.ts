@@ -1068,7 +1068,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	const START_GREETING =
 		"Привет!\n\n" +
-		"Я ассистент по Yandex Tracker\n\n" +
+		"Я Omni, ассистент по Yandex Tracker\n\n" +
 		"Задайте вопрос обычным текстом — отвечу по задаче, статусу или итогам\n\n" +
 		"Если есть номер задачи, укажите его, например PROJ-1234";
 
@@ -1090,6 +1090,7 @@ export async function createBot(options: CreateBotOptions) {
 				"/tools - список инструментов Yandex Tracker\n" +
 				"/model - текущая модель (list|set <ref>)\n" +
 				"/model reasoning off|low|standard|high\n" +
+				"/whoami - информация о боте\n" +
 				"/tracker <tool> <json> - вызвать инструмент с JSON аргументами\n\n" +
 				"Можно просто спросить, например:\n" +
 				'"Делали интеграцию с ЦИАН?"',
@@ -1283,6 +1284,10 @@ export async function createBot(options: CreateBotOptions) {
 	bot.command("status", (ctx) => {
 		setLogContext(ctx, { command: "/status", message_type: "command" });
 		return handleStatus(ctx);
+	});
+	bot.command("whoami", (ctx) => {
+		setLogContext(ctx, { command: "/whoami", message_type: "command" });
+		return sendText(ctx, "Я Omni, ассистент по Yandex Tracker.");
 	});
 
 	bot.callbackQuery(/^cmd:(help|status)$/, async (ctx) => {
