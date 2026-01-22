@@ -1129,10 +1129,10 @@ export async function createBot(options: CreateBotOptions) {
 
 	const START_GREETING =
 		"Привет!\n\n" +
-		"Я Омни, ассистент по Yandex Tracker.\n" +
+		"Я Омни, персональный ассистент.\n" +
 		"Отвечаю по задачам, статусам и итогам, могу искать в интернете.\n" +
 		"Можно писать текстом или голосом.\n" +
-		"Если есть номер задачи — укажите его, например PROJ-1234.";
+		"Если есть номер задачи — укажите его, например PROJ-1234.\n\n";
 
 	bot.command("start", (ctx) => {
 		setLogContext(ctx, { command: "/start", message_type: "command" });
