@@ -10,7 +10,13 @@ import {
 	tool,
 	experimental_transcribe as transcribe,
 } from "ai";
-import { API_CONSTANTS, Bot, type Context, InlineKeyboard } from "grammy";
+import {
+	API_CONSTANTS,
+	Bot,
+	type CallbackQueryContext,
+	type Context,
+	InlineKeyboard,
+} from "grammy";
 import type { Update } from "grammy/types";
 import { z } from "zod";
 import {
@@ -1032,11 +1038,13 @@ export async function createBot(options: CreateBotOptions) {
 		await sendText(
 			ctx,
 			"Команды:\n" +
-				"/tools - список инструментов Yandex Tracker\n" +
-				"/model - текущая модель (list|set <ref>)\n" +
-				"/model reasoning off|low|standard|high\n" +
-				"/whoami - информация о боте\n" +
-				"/tracker <tool> <json> - вызвать инструмент с JSON аргументами\n\n" +
+				"/tools - показать, какие инструменты Tracker доступны\n" +
+				"/model - показать или сменить модель (list — список, set — выбрать)\n" +
+				"/model list - показать список моделей\n" +
+				"/model set <ref> - выбрать модель по имени\n" +
+				"/model reasoning <level> - установить уровень логики ответа (off/low/standard/high)\n" +
+				"/whoami - кто такой бот\n" +
+				"/tracker <tool> <json> - вручную вызвать инструмент с параметрами (для продвинутых)\n\n" +
 				"Можно просто спросить, например:\n" +
 				'"Делали интеграцию с ЦИАН?"',
 		);
@@ -1230,24 +1238,54 @@ export async function createBot(options: CreateBotOptions) {
 		setLogContext(ctx, { command: "/status", message_type: "command" });
 		return handleStatus(ctx);
 	});
+
 	bot.command("whoami", (ctx) => {
 		setLogContext(ctx, { command: "/whoami", message_type: "command" });
 		return sendText(ctx, "Я Omni, ассистент по Yandex Tracker.");
 	});
 
+	async function safeAnswerCallback(ctx: {
+		answerCallbackQuery: () => Promise<unknown>;
+	}) {
+		try {
+			await ctx.answerCallbackQuery();
+		} catch (error) {
+			logDebug("callback_query answer failed", { error: String(error) });
+		}
+	}
+
+	async function refreshInlineKeyboard(ctx: CallbackQueryContext<BotContext>) {
+		try {
+			await ctx.editMessageReplyMarkup({
+				reply_markup: startKeyboard,
+			});
+		} catch (error) {
+			logDebug("callback_query refresh keyboard failed", {
+				error: String(error),
+			});
+		}
+	}
+
 	bot.callbackQuery(/^cmd:(help|status)$/, async (ctx) => {
 		setLogContext(ctx, { message_type: "callback" });
-		await ctx.answerCallbackQuery();
+		await safeAnswerCallback(ctx);
 		const command = ctx.match?.[1];
 		if (command === "help") {
 			setLogContext(ctx, { command: "cmd:help" });
 			await handleHelp(ctx);
+			await refreshInlineKeyboard(ctx);
 			return;
 		}
 		if (command === "status") {
 			setLogContext(ctx, { command: "cmd:status" });
 			await handleStatus(ctx);
+			await refreshInlineKeyboard(ctx);
 		}
+	});
+
+	bot.on("callback_query:data", async (ctx) => {
+		setLogContext(ctx, { message_type: "callback" });
+		await safeAnswerCallback(ctx);
 	});
 
 	bot.command("tracker", async (ctx) => {
