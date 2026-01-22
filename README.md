@@ -41,6 +41,7 @@
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
   - Serverless webhook hosting with global edge execution
   - Fast deploys and built-in request logging
+  - Durable Objects for reliable update processing with retries
 
 ## Model Providers
 
@@ -89,13 +90,21 @@ INSTANCE_ID =
 These live in `worker/wrangler.toml` under `[vars]`, or can be set in the
 Cloudflare dashboard.
 
-4) Deploy
+4) Durable Object migration (required for Telegram updates)
 
 ```
 npx wrangler deploy --config worker/wrangler.toml
 ```
 
-5) Set Telegram webhook
+This first deploy creates the SQLite-backed Durable Object class for free plans.
+
+5) Deploy (subsequent updates)
+
+```
+npx wrangler deploy --config worker/wrangler.toml
+```
+
+6) Set Telegram webhook
 
 ```
 https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://<your-worker>.workers.dev/telegram

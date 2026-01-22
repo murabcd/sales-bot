@@ -22,3 +22,9 @@ To disable mention gating in groups, set `TELEGRAM_GROUP_REQUIRE_MENTION=0`.
 
 The bot replies to the triggering message in Telegram (uses `reply_to_message_id`)
 so conversations stay threaded in groups and channels.
+
+## Webhook reliability
+
+The Cloudflare Worker acknowledges webhooks immediately and defers processing
+to a Durable Object queue with retries and backoff. This avoids Telegram webhook
+timeouts while preserving at-least-once delivery.
