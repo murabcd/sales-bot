@@ -173,6 +173,21 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	const runtimeSkills = options.runtimeSkills ?? [];
+	const SUPPORTED_TRACKER_TOOLS = new Set([
+		"issues_find",
+		"issue_get",
+		"issue_get_comments",
+		"issue_get_url",
+	]);
+	const filteredRuntimeSkills = runtimeSkills.filter((skill) => {
+		const { server, tool } = resolveToolRef(skill.tool);
+		return server === "yandex-tracker" && SUPPORTED_TRACKER_TOOLS.has(tool);
+	});
+	if (filteredRuntimeSkills.length !== runtimeSkills.length) {
+		console.warn(
+			`[skills] Filtered runtime skills: ${filteredRuntimeSkills.length}/${runtimeSkills.length} supported.`,
+		);
+	}
 
 	const AGENT_TOOL_LIST = [
 		{
@@ -394,6 +409,7 @@ export async function createBot(options: CreateBotOptions) {
 		recentCandidates?: CandidateIssue[];
 		history?: string;
 		chatId?: string;
+		ctx?: BotContext;
 	}) {
 		const memoryTools = buildMemoryTools(options?.chatId);
 		const webSearchContextSize = resolveWebSearchContextSize(
@@ -445,6 +461,7 @@ export async function createBot(options: CreateBotOptions) {
 							"issues_find",
 							payload,
 							30_000,
+							options?.ctx,
 						);
 						const normalized = normalizeIssuesResult(result);
 						const keywords = extractKeywords(question, 12).map((item) =>
@@ -465,6 +482,7 @@ export async function createBot(options: CreateBotOptions) {
 							commentsByIssue,
 							commentDeadline,
 							commentStats,
+							options?.ctx,
 						);
 
 						let selected = top;
@@ -563,6 +581,7 @@ export async function createBot(options: CreateBotOptions) {
 			chatId?: string;
 			userName?: string;
 			onToolStep?: (toolNames: string[]) => Promise<void> | void;
+			ctx?: BotContext;
 		},
 	) {
 		const tools = await getAgentTools();
@@ -642,6 +661,7 @@ export async function createBot(options: CreateBotOptions) {
 		commentsByIssue: Record<string, { text: string; truncated: boolean }>,
 		deadlineMs: number,
 		stats: { fetched: number; cacheHits: number },
+		ctx?: BotContext,
 	) {
 		if (!keys.length) return;
 		let cursor = 0;
@@ -666,6 +686,7 @@ export async function createBot(options: CreateBotOptions) {
 						"issue_get_comments",
 						{ issue_id: key },
 						30_000,
+						ctx,
 					);
 					stats.fetched += 1;
 					const extracted = extractCommentsText(commentResult);
@@ -943,38 +964,128 @@ export async function createBot(options: CreateBotOptions) {
 
 	type TrackerToolResult = unknown;
 
+	function extractIssueKey(args: Record<string, unknown>): string | undefined {
+		const raw = args.issue_id ?? args.issueId ?? args.key;
+		return typeof raw === "string" && raw.trim().length > 0
+			? raw.trim()
+			: undefined;
+	}
+
+	function logTrackerAudit(
+		ctx: BotContext | undefined,
+		toolName: string,
+		args: Record<string, unknown>,
+		outcome: "success" | "error",
+		error?: string,
+		durationMs?: number,
+	) {
+		const context = ctx ? getLogContext(ctx) : {};
+		const issueKey = extractIssueKey(args);
+		const query = typeof args.query === "string" ? args.query : undefined;
+		const payload = {
+			event: "tracker_tool",
+			outcome,
+			tool: toolName,
+			issue_key: issueKey,
+			query_len: query ? query.length : undefined,
+			request_id: context.request_id,
+			chat_id: context.chat_id,
+			user_id: context.user_id,
+			username: context.username,
+			duration_ms: durationMs,
+			error,
+		};
+		const level = outcome === "error" ? "error" : "info";
+		logger[level](payload);
+	}
+
 	async function trackerCallTool<T = TrackerToolResult>(
 		toolName: string,
 		args: Record<string, unknown>,
 		timeoutMs: number,
+		ctx?: BotContext,
 	): Promise<T> {
 		lastTrackerCallAt = Date.now();
-		switch (toolName) {
-			case "issues_find": {
-				const query = String(args.query ?? "");
-				const perPage = Number(args.per_page ?? args.perPage ?? 100);
-				const page = Number(args.page ?? 1);
-				return (await trackerIssuesFind({
-					query,
-					perPage: Number.isFinite(perPage) ? perPage : 100,
-					page: Number.isFinite(page) ? page : 1,
-					timeoutMs,
-				})) as T;
+		if (ctx) {
+			setLogContext(ctx, {
+				tool: toolName,
+				issue_key: extractIssueKey(args),
+			});
+		}
+		const startedAt = Date.now();
+		try {
+			switch (toolName) {
+				case "issues_find": {
+					const query = String(args.query ?? "");
+					const perPage = Number(args.per_page ?? args.perPage ?? 100);
+					const page = Number(args.page ?? 1);
+					const result = await trackerIssuesFind({
+						query,
+						perPage: Number.isFinite(perPage) ? perPage : 100,
+						page: Number.isFinite(page) ? page : 1,
+						timeoutMs,
+					});
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_get": {
+					const issueId = String(args.issue_id ?? "");
+					const result = await trackerIssueGet(issueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_get_comments": {
+					const issueId = String(args.issue_id ?? "");
+					const result = await trackerIssueGetComments(issueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_get_url": {
+					const issueId = String(args.issue_id ?? "");
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return `https://tracker.yandex.ru/${issueId}` as unknown as T;
+				}
+				default:
+					throw new Error(`unknown_tool:${toolName}`);
 			}
-			case "issue_get": {
-				const issueId = String(args.issue_id ?? "");
-				return (await trackerIssueGet(issueId, timeoutMs)) as T;
-			}
-			case "issue_get_comments": {
-				const issueId = String(args.issue_id ?? "");
-				return (await trackerIssueGetComments(issueId, timeoutMs)) as T;
-			}
-			case "issue_get_url": {
-				const issueId = String(args.issue_id ?? "");
-				return `https://tracker.yandex.ru/${issueId}` as unknown as T;
-			}
-			default:
-				throw new Error(`unknown_tool:${toolName}`);
+		} catch (error) {
+			logTrackerAudit(
+				ctx,
+				toolName,
+				args,
+				"error",
+				String(error),
+				Date.now() - startedAt,
+			);
+			throw error;
 		}
 	}
 
@@ -1140,11 +1251,11 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("skills", async (ctx) => {
 		setLogContext(ctx, { command: "/skills", message_type: "command" });
-		if (!runtimeSkills.length) {
+		if (!filteredRuntimeSkills.length) {
 			await sendText(ctx, "Нет доступных runtime-skills.");
 			return;
 		}
-		const lines = runtimeSkills.map((skill) => {
+		const lines = filteredRuntimeSkills.map((skill) => {
 			const desc = skill.description ? ` - ${skill.description}` : "";
 			return `${skill.name}${desc}`;
 		});
@@ -1153,13 +1264,23 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("skill", async (ctx) => {
 		setLogContext(ctx, { command: "/skill", message_type: "command" });
+		if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+			const allowReply =
+				ctx.message?.reply_to_message?.from?.id !== undefined &&
+				ctx.me?.id !== undefined &&
+				ctx.message.reply_to_message.from.id === ctx.me.id;
+			if (!allowReply && !isBotMentioned(ctx)) {
+				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+				return;
+			}
+		}
 		const text = ctx.message?.text ?? "";
 		const [, skillName, ...rest] = text.split(" ");
 		if (!skillName) {
 			await sendText(ctx, "Использование: /skill <name> <json>");
 			return;
 		}
-		const skill = runtimeSkills.find((item) => item.name === skillName);
+		const skill = filteredRuntimeSkills.find((item) => item.name === skillName);
 		if (!skill) {
 			await sendText(ctx, `Неизвестный skill: ${skillName}`);
 			return;
@@ -1192,6 +1313,7 @@ export async function createBot(options: CreateBotOptions) {
 				tool,
 				mergedArgs,
 				skill.timeoutMs ?? 30_000,
+				ctx,
 			);
 			const text = formatToolResult(result);
 			if (text) {
@@ -1290,6 +1412,16 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("tracker", async (ctx) => {
 		setLogContext(ctx, { command: "/tracker", message_type: "command" });
+		if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+			const allowReply =
+				ctx.message?.reply_to_message?.from?.id !== undefined &&
+				ctx.me?.id !== undefined &&
+				ctx.message.reply_to_message.from.id === ctx.me.id;
+			if (!allowReply && !isBotMentioned(ctx)) {
+				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+				return;
+			}
+		}
 		const text = ctx.message?.text ?? "";
 		const [, toolName, ...rest] = text.split(" ");
 		if (!toolName) {
@@ -1297,6 +1429,14 @@ export async function createBot(options: CreateBotOptions) {
 			return;
 		}
 		setLogContext(ctx, { tool: toolName });
+
+		if (!SUPPORTED_TRACKER_TOOLS.has(toolName)) {
+			await sendText(
+				ctx,
+				`Неподдерживаемый инструмент: ${toolName}. Используйте: ${Array.from(SUPPORTED_TRACKER_TOOLS).join(", ")}`,
+			);
+			return;
+		}
 
 		const rawArgs = rest.join(" ").trim();
 		let args: Record<string, unknown> = {};
@@ -1310,7 +1450,7 @@ export async function createBot(options: CreateBotOptions) {
 		}
 
 		try {
-			const result = await trackerCallTool(toolName, args, 30_000);
+			const result = await trackerCallTool(toolName, args, 30_000, ctx);
 			const text = formatToolResult(result);
 			if (text) {
 				await sendText(ctx, text);
@@ -1547,11 +1687,12 @@ export async function createBot(options: CreateBotOptions) {
 					const issuesData = await Promise.all(
 						issueKeys.slice(0, 5).map(async (key) => {
 							const [issueResult, commentResult] = await Promise.all([
-								trackerCallTool("issue_get", { issue_id: key }, 30_000),
+								trackerCallTool("issue_get", { issue_id: key }, 30_000, ctx),
 								trackerCallTool(
 									"issue_get_comments",
 									{ issue_id: key },
 									30_000,
+									ctx,
 								),
 							]);
 							return {
@@ -1637,11 +1778,12 @@ export async function createBot(options: CreateBotOptions) {
 			if (issueKey) {
 				try {
 					const [issueResult, commentResult] = await Promise.all([
-						trackerCallTool("issue_get", { issue_id: issueKey }, 30_000),
+						trackerCallTool("issue_get", { issue_id: issueKey }, 30_000, ctx),
 						trackerCallTool(
 							"issue_get_comments",
 							{ issue_id: issueKey },
 							30_000,
+							ctx,
 						),
 					]);
 					const issueText = formatToolResult(issueResult);
@@ -1744,6 +1886,7 @@ export async function createBot(options: CreateBotOptions) {
 						chatId: memoryId,
 						userName,
 						onToolStep,
+						ctx,
 					});
 					const result = await agent.generate({ prompt: text });
 					clearAllStatuses();
