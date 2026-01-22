@@ -27,12 +27,14 @@ import {
 } from "./lib/context/session-history.js";
 import { createLogger } from "./lib/logger.js";
 import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
+import { isBotMentionedMessage } from "./lib/telegram-mentions.js";
 import {
 	expandTermVariants,
 	extractIssueKeysFromText,
 	extractKeywords,
 	normalizeForMatch,
 } from "./lib/text/normalize.js";
+import { createToolStatusHandler } from "./lib/tool-status.js";
 import {
 	type ModelsFile,
 	normalizeModelRef,
@@ -360,28 +362,7 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	function isBotMentioned(ctx: BotContext) {
-		const message = ctx.message;
-		if (!message || !("text" in message)) return false;
-		if (typeof message.text !== "string") return false;
-
-		const replyToBot =
-			message.reply_to_message?.from?.id !== undefined &&
-			ctx.me?.id !== undefined &&
-			message.reply_to_message.from.id === ctx.me.id;
-		if (replyToBot) return true;
-
-		const username = ctx.me?.username;
-		if (!username) return false;
-		const entities = message.entities ?? [];
-		for (const entity of entities) {
-			if (entity.type !== "mention") continue;
-			const mention = message.text.slice(
-				entity.offset,
-				entity.offset + entity.length,
-			);
-			if (mention.toLowerCase() === `@${username.toLowerCase()}`) return true;
-		}
-		return false;
+		return isBotMentionedMessage(ctx.message, ctx.me);
 	}
 
 	function getModelConfig(ref: string) {
@@ -1575,36 +1556,7 @@ export async function createBot(options: CreateBotOptions) {
 			? { reply_to_message_id: replyToMessageId }
 			: undefined;
 		const sendReply = (message: string) => sendText(ctx, message, replyOptions);
-		const toolStatusSent = new Set<string>();
-		const toolStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
-		const scheduleStatus = (key: string, message: string, delayMs = 1500) => {
-			if (toolStatusSent.has(key) || toolStatusTimers.has(key)) return;
-			const timer = setTimeout(() => {
-				void sendReply(message);
-				toolStatusSent.add(key);
-				toolStatusTimers.delete(key);
-			}, delayMs);
-			toolStatusTimers.set(key, timer);
-		};
-		const clearStatus = (key: string) => {
-			const timer = toolStatusTimers.get(key);
-			if (timer) {
-				clearTimeout(timer);
-				toolStatusTimers.delete(key);
-			}
-		};
-		const clearAllStatuses = () => {
-			clearStatus("web_search");
-			clearStatus("tracker_search");
-		};
-		const sendToolStatus = (toolNames: string[]) => {
-			const hasWeb = toolNames.includes("web_search");
-			const hasTracker = toolNames.includes("tracker_search");
-			if (hasWeb) scheduleStatus("web_search", "Ищу в интернете…");
-			if (hasTracker) scheduleStatus("tracker_search", "Проверяю в Tracker…");
-			if (!hasWeb) clearStatus("web_search");
-			if (!hasTracker) clearStatus("tracker_search");
-		};
+		const { onToolStep, clearAllStatuses } = createToolStatusHandler(sendReply);
 
 		try {
 			await ctx.replyWithChatAction("typing");
@@ -1852,7 +1804,7 @@ export async function createBot(options: CreateBotOptions) {
 						history: historyText,
 						chatId: memoryId,
 						userName,
-						onToolStep: sendToolStatus,
+						onToolStep,
 					});
 					const result = await agent.generate({ prompt: text });
 					clearAllStatuses();
