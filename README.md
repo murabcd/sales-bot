@@ -72,6 +72,8 @@ npx wrangler secret put SUPERMEMORY_API_KEY --config worker/wrangler.toml
 
 ```
 ALLOWED_TG_IDS = 
+ALLOWED_TG_GROUPS = ""
+TELEGRAM_GROUP_REQUIRE_MENTION = "1"
 TRACKER_CLOUD_ORG_ID = 
 OPENAI_MODEL = "openai/gpt-5.2"
 SUPERMEMORY_API_KEY =

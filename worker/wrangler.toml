@@ -5,6 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ALLOWED_TG_IDS=""
+ALLOWED_TG_GROUPS = "-12345"
+TELEGRAM_GROUP_REQUIRE_MENTION = "1"
 TRACKER_CLOUD_ORG_ID = "bpfd8lkv5f11dcc2t3sj"
 OPENAI_MODEL = "openai/gpt-5.2"
 WEB_SEARCH_ENABLED = "1"

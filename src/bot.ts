@@ -107,6 +107,9 @@ export async function createBot(options: CreateBotOptions) {
 		env.TELEGRAM_TEXT_CHUNK_LIMIT ?? "4000",
 		10,
 	);
+	const ALLOWED_TG_GROUPS = env.ALLOWED_TG_GROUPS ?? "";
+	const TELEGRAM_GROUP_REQUIRE_MENTION =
+		env.TELEGRAM_GROUP_REQUIRE_MENTION !== "0";
 	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
 	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
 	const SERVICE_NAME = env.SERVICE_NAME ?? "omni";
@@ -321,6 +324,11 @@ export async function createBot(options: CreateBotOptions) {
 			.map((value: string) => value.trim())
 			.filter((value: string) => value.length > 0),
 	);
+	const allowedGroups = new Set(
+		ALLOWED_TG_GROUPS.split(",")
+			.map((value: string) => value.trim())
+			.filter((value: string) => value.length > 0),
+	);
 
 	bot.use((ctx, next) => {
 		if (allowedIds.size === 0) return next();
@@ -337,6 +345,39 @@ export async function createBot(options: CreateBotOptions) {
 
 	function resolveReasoningFor(config: typeof activeModelConfig): string {
 		return activeReasoningOverride ?? config.reasoning ?? "standard";
+	}
+
+	function isGroupChat(ctx: BotContext) {
+		const type = ctx.chat?.type;
+		return type === "group" || type === "supergroup";
+	}
+
+	function isGroupAllowed(ctx: BotContext) {
+		if (!isGroupChat(ctx)) return true;
+		if (allowedGroups.size === 0) return true;
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		return allowedGroups.has(chatId);
+	}
+
+	function isBotMentioned(ctx: BotContext) {
+		const message = ctx.message;
+		if (!message || !("text" in message)) return false;
+
+		const replyToBot =
+			message.reply_to_message?.from?.id !== undefined &&
+			ctx.me?.id !== undefined &&
+			message.reply_to_message.from.id === ctx.me.id;
+		if (replyToBot) return true;
+
+		const username = ctx.me?.username;
+		if (!username) return false;
+		const entities = message.entities ?? [];
+		for (const entity of entities) {
+			if (entity.type !== "mention") continue;
+			const mention = message.text.slice(entity.offset, entity.offset + entity.length);
+			if (mention.toLowerCase() === `@${username.toLowerCase()}`) return true;
+		}
+		return false;
 	}
 
 	function getModelConfig(ref: string) {
@@ -1465,6 +1506,21 @@ export async function createBot(options: CreateBotOptions) {
 		}
 		try {
 			await ctx.replyWithChatAction("typing");
+			if (!isGroupAllowed(ctx)) {
+				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+				await sendText(ctx, "Доступ запрещен.");
+				return;
+			}
+			if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+				const allowReply =
+					ctx.message?.reply_to_message?.from?.id !== undefined &&
+					ctx.me?.id !== undefined &&
+					ctx.message.reply_to_message.from.id === ctx.me.id;
+				if (!allowReply) {
+					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+					return;
+				}
+			}
 			const file = await ctx.api.getFile(voice.file_id);
 			if (!file.file_path) {
 				await sendText(ctx, "Не удалось получить файл голосового сообщения.");
@@ -1502,10 +1558,30 @@ export async function createBot(options: CreateBotOptions) {
 
 		try {
 			await ctx.replyWithChatAction("typing");
+			if (!isGroupAllowed(ctx)) {
+				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+				await sendText(ctx, "Доступ запрещен.");
+				return;
+			}
+			if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+				const allowReply =
+					ctx.message?.reply_to_message?.from?.id !== undefined &&
+					ctx.me?.id !== undefined &&
+					ctx.message.reply_to_message.from.id === ctx.me.id;
+				if (!allowReply && !isBotMentioned(ctx)) {
+					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+					return;
+				}
+			}
 			const chatId = ctx.chat?.id?.toString() ?? "";
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
+			const replyToMessageId = ctx.message?.message_id;
+			const replyOptions = replyToMessageId
+				? { reply_to_message_id: replyToMessageId }
+				: undefined;
+			const sendReply = (message: string) => sendText(ctx, message, replyOptions);
 			const historyMessages =
 				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
 					? await loadHistoryMessages(
@@ -1598,7 +1674,7 @@ export async function createBot(options: CreateBotOptions) {
 									text: reply,
 								});
 							}
-							await sendText(ctx, reply);
+							await sendReply(reply);
 							return;
 						} catch (error) {
 							lastError = error;
@@ -1609,11 +1685,11 @@ export async function createBot(options: CreateBotOptions) {
 						}
 					}
 					setLogError(ctx, lastError ?? "unknown_error");
-					await sendText(ctx, `Ошибка: ${String(lastError ?? "unknown")}`);
+					await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
 					return;
 				} catch (error) {
 					setLogError(ctx, error);
-					await sendText(ctx, `Ошибка: ${String(error)}`);
+					await sendReply(`Ошибка: ${String(error)}`);
 					return;
 				}
 			}
@@ -1688,7 +1764,7 @@ export async function createBot(options: CreateBotOptions) {
 									text: reply,
 								});
 							}
-							await sendText(ctx, reply);
+							await sendReply(reply);
 							return;
 						} catch (error) {
 							lastError = error;
@@ -1696,11 +1772,11 @@ export async function createBot(options: CreateBotOptions) {
 						}
 					}
 					setLogError(ctx, lastError ?? "unknown_error");
-					await sendText(ctx, `Ошибка: ${String(lastError ?? "unknown")}`);
+					await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
 					return;
 				} catch (error) {
 					setLogError(ctx, error);
-					await sendText(ctx, `Ошибка: ${String(error)}`);
+					await sendReply(`Ошибка: ${String(error)}`);
 					return;
 				}
 			}
@@ -1780,7 +1856,7 @@ export async function createBot(options: CreateBotOptions) {
 							text: reply,
 						});
 					}
-					await sendText(ctx, reply);
+					await sendReply(reply);
 					return;
 				} catch (error) {
 					lastError = error;
@@ -1788,10 +1864,10 @@ export async function createBot(options: CreateBotOptions) {
 				}
 			}
 			setLogError(ctx, lastError ?? "unknown_error");
-			await sendText(ctx, `Ошибка: ${String(lastError ?? "unknown")}`);
+			await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
 		} catch (error) {
 			setLogError(ctx, error);
-			await sendText(ctx, `Ошибка: ${String(error)}`);
+			await sendReply(`Ошибка: ${String(error)}`);
 		}
 	}
 
