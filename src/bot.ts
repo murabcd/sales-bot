@@ -653,6 +653,7 @@ export async function createBot(options: CreateBotOptions) {
 			history?: string;
 			chatId?: string;
 			userName?: string;
+			onToolStep?: (toolNames: string[]) => Promise<void> | void;
 		},
 	) {
 		const tools = await getAgentTools();
@@ -678,6 +679,15 @@ export async function createBot(options: CreateBotOptions) {
 			instructions,
 			tools: agentTools,
 			stopWhen: stepCountIs(6),
+			onStepFinish: ({ toolCalls }) => {
+				if (!options?.onToolStep) return;
+				const names = (toolCalls ?? [])
+					.map((call) => call?.toolName)
+					.filter((name): name is string => Boolean(name));
+				if (names.length > 0) {
+					options.onToolStep(names);
+				}
+			},
 		});
 	}
 
@@ -1565,6 +1575,36 @@ export async function createBot(options: CreateBotOptions) {
 			? { reply_to_message_id: replyToMessageId }
 			: undefined;
 		const sendReply = (message: string) => sendText(ctx, message, replyOptions);
+		const toolStatusSent = new Set<string>();
+		const toolStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
+		const scheduleStatus = (key: string, message: string, delayMs = 1500) => {
+			if (toolStatusSent.has(key) || toolStatusTimers.has(key)) return;
+			const timer = setTimeout(() => {
+				void sendReply(message);
+				toolStatusSent.add(key);
+				toolStatusTimers.delete(key);
+			}, delayMs);
+			toolStatusTimers.set(key, timer);
+		};
+		const clearStatus = (key: string) => {
+			const timer = toolStatusTimers.get(key);
+			if (timer) {
+				clearTimeout(timer);
+				toolStatusTimers.delete(key);
+			}
+		};
+		const clearAllStatuses = () => {
+			clearStatus("web_search");
+			clearStatus("tracker_search");
+		};
+		const sendToolStatus = (toolNames: string[]) => {
+			const hasWeb = toolNames.includes("web_search");
+			const hasTracker = toolNames.includes("tracker_search");
+			if (hasWeb) scheduleStatus("web_search", "Ищу в интернете…");
+			if (hasTracker) scheduleStatus("tracker_search", "Проверяю в Tracker…");
+			if (!hasWeb) clearStatus("web_search");
+			if (!hasTracker) clearStatus("tracker_search");
+		};
 
 		try {
 			await ctx.replyWithChatAction("typing");
@@ -1648,6 +1688,7 @@ export async function createBot(options: CreateBotOptions) {
 								userName,
 							});
 							const result = await agent.generate({ prompt: text });
+							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
 								.sources;
@@ -1740,6 +1781,7 @@ export async function createBot(options: CreateBotOptions) {
 								userName,
 							});
 							const result = await agent.generate({ prompt: text });
+							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
 								.sources;
@@ -1810,8 +1852,10 @@ export async function createBot(options: CreateBotOptions) {
 						history: historyText,
 						chatId: memoryId,
 						userName,
+						onToolStep: sendToolStatus,
 					});
 					const result = await agent.generate({ prompt: text });
+					clearAllStatuses();
 					if (DEBUG_LOGS) {
 						const steps =
 							(
@@ -1871,6 +1915,7 @@ export async function createBot(options: CreateBotOptions) {
 			setLogError(ctx, lastError ?? "unknown_error");
 			await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
 		} catch (error) {
+			clearAllStatuses();
 			setLogError(ctx, error);
 			await sendReply(`Ошибка: ${String(error)}`);
 		}
