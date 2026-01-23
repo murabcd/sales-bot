@@ -1637,7 +1637,9 @@ export async function createBot(options: CreateBotOptions) {
 		if (!text || text.startsWith("/")) {
 			return;
 		}
-		const replyToMessageId = ctx.message?.message_id;
+		const replyToMessageId = isGroupChat(ctx)
+			? ctx.message?.message_id
+			: undefined;
 		const replyOptions = replyToMessageId
 			? { reply_to_message_id: replyToMessageId }
 			: undefined;
