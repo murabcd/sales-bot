@@ -1,3 +1,5 @@
+import { createMessagingDedupe } from "./tools/messaging-dedupe.js";
+
 export type ToolStatusOptions = {
 	delayMs?: number;
 	webMessage?: string;
@@ -13,10 +15,13 @@ export function createToolStatusHandler(
 	const trackerMessage = options.trackerMessage ?? "Проверяю в Tracker…";
 	const toolStatusSent = new Set<string>();
 	const toolStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	const { record, shouldSend } = createMessagingDedupe();
 
 	const scheduleStatus = (key: string, message: string) => {
 		if (toolStatusSent.has(key) || toolStatusTimers.has(key)) return;
 		const timer = setTimeout(() => {
+			if (!shouldSend(message)) return;
+			record(message);
 			void sendReply(message);
 			toolStatusSent.add(key);
 			toolStatusTimers.delete(key);

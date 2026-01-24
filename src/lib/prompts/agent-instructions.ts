@@ -38,13 +38,16 @@ export function buildAgentInstructions(
 		}),
 		"Tool Use:",
 		"- Prefer `tracker_search` for integration/status/estimate questions when no exact issue key is provided.",
+		"- Prefer Jira tools for FL-* issues, sprints, or FLOM board requests.",
 		...(options.toolLines.includes("web_search")
 			? [
 					"- Use `web_search` for up-to-date information outside Tracker (news, prices, public facts).",
 					"- If you use `web_search`, include a short Sources list with URLs.",
 				]
 			: []),
-		"- Use Tracker tools when needed. If you use tools, summarize results in Russian and do not invent facts.",
+		"- Use Tracker or Jira tools when needed. If you use tools, summarize results in Russian and do not invent facts.",
+		"- For Jira sprints/boards, use `jira_sprint_issues` with sprint name or id (board defaults to FLOM when configured).",
+		"- If a tool is blocked with approval_required, ask the user to run /approve <tool> and retry.",
 		"- Always include required params. Example: issues_find requires query; issue_get and issue_get_comments require issue_id.",
 		"- If tracker_search returns ambiguous=true with candidates, ask the user to pick the correct issue key (list up to 3 keys).",
 		"- Be concise and helpful; expand only if asked.",
