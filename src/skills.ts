@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeToolName } from "./lib/tools/registry.js";
 import { type RuntimeSkill, resolveToolRef } from "./skills-core.js";
 
 type RawSkill = Partial<RuntimeSkill>;
@@ -52,6 +53,8 @@ export async function loadSkills(baseDir = "skills"): Promise<RuntimeSkill[]> {
 	}
 
 	const skills: RuntimeSkill[] = [];
+	const seenNames = new Set<string>();
+	const seenToolRefs = new Set<string>();
 	for (const skillPath of skillFiles) {
 		let raw: RawSkill;
 		try {
@@ -76,6 +79,39 @@ export async function loadSkills(baseDir = "skills"): Promise<RuntimeSkill[]> {
 			);
 			continue;
 		}
+
+		const normalizedName = normalizeToolName(raw.name);
+		if (!normalizedName) {
+			console.warn(
+				`[skills] Invalid skill name (empty after normalization): ${skillPath}`,
+			);
+			continue;
+		}
+		if (seenNames.has(normalizedName)) {
+			console.warn(
+				`[skills] Duplicate skill name "${raw.name}" (normalized "${normalizedName}") skipped: ${skillPath}`,
+			);
+			continue;
+		}
+
+		const { server, tool } = resolveToolRef(raw.tool);
+		const normalizedTool = normalizeToolName(tool);
+		const toolRef = `${server.trim().toLowerCase()}:${normalizedTool}`;
+		if (!normalizedTool) {
+			console.warn(
+				`[skills] Invalid tool reference (empty after normalization): ${skillPath}`,
+			);
+			continue;
+		}
+		if (seenToolRefs.has(toolRef)) {
+			console.warn(
+				`[skills] Duplicate tool reference "${toolRef}" skipped: ${skillPath}`,
+			);
+			continue;
+		}
+
+		seenNames.add(normalizedName);
+		seenToolRefs.add(toolRef);
 
 		skills.push({
 			name: raw.name,

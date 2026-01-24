@@ -51,7 +51,6 @@ function parseMemory(content: string): HistoryMessage | null {
 }
 
 export async function appendHistoryMessage(
-	_baseDir: string,
 	chatId: string,
 	message: HistoryMessage,
 ): Promise<void> {
@@ -75,7 +74,6 @@ export async function appendHistoryMessage(
 }
 
 export async function loadHistoryMessages(
-	_baseDir: string,
 	chatId: string,
 	limit: number,
 	query: string,
@@ -120,7 +118,7 @@ export async function loadHistoryMessages(
 	}
 }
 
-export function clearHistoryMessages(_baseDir: string, _chatId: string): void {
+export function clearHistoryMessages(): void {
 	// Supermemory doesn't support fast per-user clears via tools.
 	// Keep as no-op to avoid breaking command flow.
 }
