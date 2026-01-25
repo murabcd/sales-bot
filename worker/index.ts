@@ -12,6 +12,12 @@ import modelsConfig from "../apps/bot/config/models.json";
 import runtimeSkills from "../apps/bot/config/runtime-skills.json";
 import { createBot } from "../apps/bot/src/bot.js";
 import { authorizeAdminRequest } from "../apps/bot/src/lib/gateway/admin-auth.js";
+import {
+	type GatewayConfig,
+	applyGatewayConfig,
+	buildGatewayConfigSnapshot,
+	sanitizeGatewayConfig,
+} from "../apps/bot/src/lib/gateway/config.js";
 import { loadGatewayPlugins } from "../apps/bot/src/lib/gateway/plugins.js";
 import { allowTelegramUpdate } from "../apps/bot/src/lib/gateway/telegram-allowlist.js";
 import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
@@ -85,45 +91,6 @@ function authorizeGatewayToken(
 	return Boolean(ip && allowlist.includes(ip));
 }
 
-const GATEWAY_CONFIG_KEYS = [
-	"ADMIN_ALLOWLIST",
-	"ALLOWED_TG_IDS",
-	"ALLOWED_TG_GROUPS",
-	"TELEGRAM_GROUP_REQUIRE_MENTION",
-	"TELEGRAM_TIMEOUT_SECONDS",
-	"TELEGRAM_TEXT_CHUNK_LIMIT",
-	"GATEWAY_PLUGINS",
-	"GATEWAY_PLUGINS_ALLOWLIST",
-	"GATEWAY_PLUGINS_DENYLIST",
-	"CRON_STATUS_ENABLED",
-	"CRON_STATUS_CHAT_ID",
-	"CRON_STATUS_TIMEZONE",
-	"CRON_STATUS_SPRINT_FILTER",
-	"CRON_STATUS_MAX_ITEMS_PER_SECTION",
-	"CRON_STATUS_SUMMARY_ENABLED",
-	"CRON_STATUS_SUMMARY_MODEL",
-	"CRON_STATUS_IN_PROGRESS_STATUSES",
-	"CRON_STATUS_BLOCKED_STATUSES",
-	"CRON_TEAM_AI_ASSIGNEES",
-	"CRON_TEAM_CS_ASSIGNEES",
-	"CRON_TEAM_HR_ASSIGNEES",
-] as const;
-
-type GatewayConfigKey = (typeof GATEWAY_CONFIG_KEYS)[number];
-type GatewayConfig = Partial<Record<GatewayConfigKey, string>>;
-
-function sanitizeGatewayConfig(input: unknown): GatewayConfig {
-	const next: GatewayConfig = {};
-	if (!input || typeof input !== "object") return next;
-	for (const key of GATEWAY_CONFIG_KEYS) {
-		const raw = (input as Record<string, unknown>)[key];
-		if (typeof raw === "string") {
-			next[key] = raw;
-		}
-	}
-	return next;
-}
-
 async function readGatewayConfig(env: Env): Promise<GatewayConfig> {
 	const id = env.GATEWAY_CONFIG_DO.idFromName("gateway-config");
 	const stub = env.GATEWAY_CONFIG_DO.get(id);
@@ -146,32 +113,6 @@ async function writeGatewayConfig(env: Env, config: GatewayConfig) {
 	}
 	const payload = (await response.json()) as { config?: GatewayConfig };
 	return payload.config ?? {};
-}
-
-function applyGatewayConfig(env: Env, config: GatewayConfig) {
-	const next = { ...env };
-	for (const [key, value] of Object.entries(config)) {
-		const trimmed = typeof value === "string" ? value.trim() : "";
-		if (trimmed) {
-			next[key as GatewayConfigKey] = trimmed;
-		}
-	}
-	return next;
-}
-
-function buildGatewayConfigSnapshot(env: Env, config: GatewayConfig): GatewayConfig {
-	const snapshot: GatewayConfig = {};
-	for (const key of GATEWAY_CONFIG_KEYS) {
-		const stored = config[key];
-		if (typeof stored === "string" && stored.trim()) {
-			snapshot[key] = stored;
-		} else if (env[key] !== undefined) {
-			snapshot[key] = env[key];
-		} else {
-			snapshot[key] = "";
-		}
-	}
-	return snapshot;
 }
 
 export default {
