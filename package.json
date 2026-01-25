@@ -12,6 +12,9 @@
 		"check": "turbo run lint",
 		"type-check": "turbo run type-check",
 		"test": "turbo run test",
+		"dev:admin": "turbo run dev --filter=@omni/admin",
+		"dev:bot": "turbo run dev --filter=@omni/bot",
+		"dev:worker": "turbo run dev --filter=@omni/worker",
 		"prepare": "husky"
 	},
 	"workspaces": [
