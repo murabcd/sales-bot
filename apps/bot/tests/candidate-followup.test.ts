@@ -3,7 +3,7 @@ import { buildAgentInstructions } from "../src/lib/prompts/agent-instructions.js
 
 const instructionsBase = {
 	question: "сделай саммари по каждой",
-	modelRef: "openai/gpt-5.2",
+	modelRef: "gpt-5.2",
 	modelName: "GPT-5.2",
 	reasoning: "standard",
 	toolLines: "tracker_search - search",

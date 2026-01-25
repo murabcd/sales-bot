@@ -986,7 +986,9 @@ export async function createBot(options: CreateBotOptions) {
 					source: "web",
 					origin: "openai",
 				},
-				openai.tools.webSearch({ searchContextSize: webSearchContextSize }),
+				openai.tools.webSearch({
+					searchContextSize: webSearchContextSize,
+				}) as unknown as ToolSet[string],
 			);
 		}
 

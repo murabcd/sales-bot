@@ -11,7 +11,7 @@ Quick start
 - Telegram: `/skill <name> <json>`
 
 Runtime skills
-- Each tool can be wrapped as a runtime skill in `skills/<name>/skill.json`.
+- Each tool can be wrapped as a runtime skill in `apps/bot/skills/<name>/skill.json`.
 - The `tool` field supports `yandex-tracker.<tool_name>`.
 
 Available Tracker tools

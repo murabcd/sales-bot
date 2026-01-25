@@ -1,0 +1,12 @@
+{
+  "name": "@omni/worker",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "wrangler dev --config ../../worker/wrangler.toml",
+    "deploy": "wrangler deploy --config ../../worker/wrangler.toml"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260124.0"
+  }
+}
