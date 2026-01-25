@@ -8,7 +8,7 @@ read_when:
 Omni reads runtime skills from the workspace:
 
 ```
-skills/**/skill.json
+apps/bot/skills/**/skill.json
 ```
 
 There is no separate global config file. Each skill defines:

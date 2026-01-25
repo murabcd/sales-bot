@@ -5,7 +5,7 @@ read_when:
 ---
 # Skills
 
-Omni loads runtime skills from `skills/**/skill.json` at startup. These are
+Omni loads runtime skills from `apps/bot/skills/**/skill.json` at startup. These are
 shortcuts for calling Tracker tools with predefined arguments.
 
 Notes:

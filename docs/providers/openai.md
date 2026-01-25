@@ -15,7 +15,7 @@ the model.
 
 ## Model selection
 
-Default models and fallbacks live in `config/models.json`.
+Default models and fallbacks live in `apps/bot/config/models.json`.
 
 Override at runtime with:
 

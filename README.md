@@ -99,7 +99,7 @@ https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://<your-worker>.wo
 
 ## Running locally
 
-You will need to use the environment variables [defined in `.env.example`](.env.example) to run OpenChat.
+You will need to use the environment variables [defined in `.env.example`](apps/bot/.env.example) to run OpenChat.
 
 > Note: You should not commit your `.env` file or it will expose secrets that will allow others to control access to your various OpenAI and authentication provider accounts.
 
