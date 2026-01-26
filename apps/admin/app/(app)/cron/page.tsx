@@ -630,14 +630,14 @@ export default function CronPage() {
 									<SelectTrigger id="cron-payload">
 										<SelectValue />
 									</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="systemEvent">System event</SelectItem>
-									<SelectItem value="agentTurn">Agent turn</SelectItem>
-									<SelectItem value="dailyStatus">Daily status</SelectItem>
-								</SelectContent>
-							</Select>
+									<SelectContent>
+										<SelectItem value="systemEvent">System event</SelectItem>
+										<SelectItem value="agentTurn">Agent turn</SelectItem>
+										<SelectItem value="dailyStatus">Daily status</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
 						</div>
-					</div>
 
 						{form.payloadKind !== "dailyStatus" ? (
 							<div className="space-y-1 text-xs text-[#666666]">
@@ -743,9 +743,9 @@ export default function CronPage() {
 											<SelectItem value="signal">Signal</SelectItem>
 											<SelectItem value="imessage">iMessage</SelectItem>
 											<SelectItem value="msteams">MS Teams</SelectItem>
-											</SelectContent>
-										</Select>
-									</div>
+										</SelectContent>
+									</Select>
+								</div>
 								<div className="space-y-1 text-xs text-[#666666]">
 									<label htmlFor="cron-timeout" className="block">
 										Timeout (seconds)
@@ -843,17 +843,10 @@ export default function CronPage() {
 					) : (
 						<div className="space-y-3">
 							{jobs.map((job) => (
-								<div
+								<button
+									type="button"
 									key={job.id}
-									role="button"
-									tabIndex={0}
 									onClick={() => loadRuns(job.id)}
-									onKeyDown={(event) => {
-										if (event.key === "Enter" || event.key === " ") {
-											event.preventDefault();
-											void loadRuns(job.id);
-										}
-									}}
 									className={`w-full text-left border border-border/60 rounded-md p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
 										runsJobId === job.id ? "bg-muted/30" : ""
 									}`}
@@ -934,7 +927,7 @@ export default function CronPage() {
 											</div>
 										</div>
 									</div>
-								</div>
+								</button>
 							))}
 						</div>
 					)}
