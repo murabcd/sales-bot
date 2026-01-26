@@ -10,6 +10,7 @@ export type AgentInstructionOptions = {
 	recentCandidates?: CandidateIssue[];
 	history?: string;
 	userName?: string;
+	systemPrompt?: string;
 };
 
 export function buildAgentInstructions(
@@ -36,6 +37,7 @@ export function buildAgentInstructions(
 			modelName: options.modelName,
 			reasoning: options.reasoning,
 		}),
+		options.systemPrompt ? `\n${options.systemPrompt}` : "",
 		"Tool Use:",
 		"- Prefer `tracker_search` for integration/status/estimate questions when no exact issue key is provided.",
 		"- Prefer Jira tools for FL-* issues, sprints, or FLOM board requests.",

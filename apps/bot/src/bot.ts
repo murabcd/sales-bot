@@ -4,9 +4,9 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
 import { supermemoryTools } from "@supermemory/tools/ai-sdk";
 import {
-	type ModelMessage,
 	createAgentUIStream,
 	createUIMessageStream,
+	type ModelMessage,
 	stepCountIs,
 	ToolLoopAgent,
 	type ToolSet,
@@ -58,11 +58,6 @@ import {
 	normalizeJiraIssue,
 } from "./lib/jira.js";
 import { createLogger } from "./lib/logger.js";
-import {
-	PluginRegistry,
-	parsePluginAllowDeny,
-	parsePluginPaths,
-} from "./lib/plugins/registry.js";
 import {
 	filterPosthogTools,
 	POSTHOG_READONLY_TOOL_NAMES,
@@ -199,9 +194,6 @@ export async function createBot(options: CreateBotOptions) {
 	);
 	const TOOL_APPROVAL_STORE_PATH =
 		env.TOOL_APPROVAL_STORE_PATH ?? "data/approvals/approvals.json";
-	const PLUGINS_PATHS = env.PLUGINS_PATHS ?? "";
-	const PLUGINS_ALLOWLIST = env.PLUGINS_ALLOWLIST ?? "";
-	const PLUGINS_DENYLIST = env.PLUGINS_DENYLIST ?? "";
 	const TOOL_ALLOWLIST_USER_IDS = env.TOOL_ALLOWLIST_USER_IDS ?? "";
 	const TOOL_DENYLIST_USER_IDS = env.TOOL_DENYLIST_USER_IDS ?? "";
 	const TOOL_ALLOWLIST_USER_TOOLS = env.TOOL_ALLOWLIST_USER_TOOLS ?? "";
@@ -277,14 +269,6 @@ export async function createBot(options: CreateBotOptions) {
 		region: REGION,
 		instance_id: INSTANCE_ID,
 	});
-
-	const pluginRegistry = new PluginRegistry({
-		allow: parsePluginAllowDeny(PLUGINS_ALLOWLIST),
-		deny: parsePluginAllowDeny(PLUGINS_DENYLIST),
-		logger: logger,
-	});
-
-	await pluginRegistry.load(parsePluginPaths(PLUGINS_PATHS));
 
 	if (!BOT_TOKEN) throw new Error("BOT_TOKEN is unset");
 	if (!TRACKER_TOKEN) throw new Error("TRACKER_TOKEN is unset");
@@ -386,18 +370,6 @@ export async function createBot(options: CreateBotOptions) {
 			if (!res.ok) return;
 			target.push(tool);
 		};
-
-		for (const pluginTool of pluginRegistry.getTools()) {
-			register(
-				{
-					name: pluginTool.name,
-					description: pluginTool.description ?? "Plugin tool",
-					source: "plugin",
-					origin: pluginTool.origin,
-				},
-				agentTools,
-			);
-		}
 
 		register(
 			{
@@ -593,7 +565,17 @@ export async function createBot(options: CreateBotOptions) {
 		error?: { message: string; type?: string };
 	};
 
-	type BotContext = Context & { state: { logContext?: LogContext } };
+	type ChannelConfig = {
+		requireMention?: boolean;
+		allowUserIds?: string[];
+		skillsAllowlist?: string[];
+		skillsDenylist?: string[];
+		systemPrompt?: string;
+	};
+
+	type BotContext = Context & {
+		state: { logContext?: LogContext; channelConfig?: ChannelConfig };
+	};
 
 	function getLogContext(ctx: BotContext) {
 		return ctx.state.logContext ?? {};
@@ -704,9 +686,23 @@ export async function createBot(options: CreateBotOptions) {
 	);
 
 	bot.use((ctx, next) => {
-		if (allowedIds.size === 0) return next();
+		const raw = (ctx.update as { __channelConfig?: unknown }).__channelConfig;
+		if (raw && typeof raw === "object") {
+			ctx.state.channelConfig = raw as ChannelConfig;
+		} else {
+			ctx.state.channelConfig = undefined;
+		}
+		return next();
+	});
+
+	bot.use((ctx, next) => {
+		const channelAllowlist = ctx.state.channelConfig?.allowUserIds ?? [];
+		if (allowedIds.size === 0 && channelAllowlist.length === 0) return next();
 		const userId = ctx.from?.id?.toString() ?? "";
-		if (!allowedIds.has(userId)) {
+		const allowedByChannel =
+			channelAllowlist.length > 0 ? channelAllowlist.includes(userId) : false;
+		const allowedByGlobal = allowedIds.has(userId);
+		if (!allowedByChannel && !allowedByGlobal) {
 			setLogContext(ctx, {
 				outcome: "blocked",
 				status_code: 403,
@@ -725,6 +721,13 @@ export async function createBot(options: CreateBotOptions) {
 		return type === "group" || type === "supergroup";
 	}
 
+	function shouldRequireMention(ctx: BotContext) {
+		const override = ctx.state.channelConfig?.requireMention;
+		return typeof override === "boolean"
+			? override
+			: TELEGRAM_GROUP_REQUIRE_MENTION;
+	}
+
 	function resolveChatToolPolicy(ctx?: BotContext) {
 		if (!ctx) return undefined;
 		const chatPolicy = isGroupChat(ctx) ? toolPolicyGroup : toolPolicyDm;
@@ -735,6 +738,25 @@ export async function createBot(options: CreateBotOptions) {
 			});
 		}
 		return merged;
+	}
+
+	function filterSkillsForChannel(
+		ctx: BotContext | undefined,
+		skills: RuntimeSkill[],
+	) {
+		const allowlist = ctx?.state.channelConfig?.skillsAllowlist;
+		const denylist = ctx?.state.channelConfig?.skillsDenylist;
+		let next = skills;
+		if (Array.isArray(allowlist)) {
+			if (allowlist.length === 0) return [];
+			const allowed = new Set(allowlist);
+			next = next.filter((skill) => allowed.has(skill.name));
+		}
+		if (Array.isArray(denylist) && denylist.length > 0) {
+			const denied = new Set(denylist);
+			next = next.filter((skill) => !denied.has(skill.name));
+		}
+		return next;
 	}
 
 	function parseOrchestrationAgentList(raw: string): OrchestrationAgentId[] {
@@ -952,18 +974,6 @@ export async function createBot(options: CreateBotOptions) {
 			if (!res.ok) return;
 			toolMap[meta.name] = toolDef;
 		};
-
-		for (const pluginTool of pluginRegistry.getTools()) {
-			registerTool(
-				{
-					name: pluginTool.name,
-					description: pluginTool.description ?? "Plugin tool",
-					source: "plugin",
-					origin: pluginTool.origin,
-				},
-				pluginTool.tool,
-			);
-		}
 
 		const memoryTools = buildMemoryTools(options?.chatId);
 		for (const [name, toolDef] of Object.entries(memoryTools)) {
@@ -1468,21 +1478,6 @@ export async function createBot(options: CreateBotOptions) {
 		const userId = options?.ctx?.from?.id?.toString();
 		const wrapped = wrapToolMapWithHooks(filteredByChat.tools as ToolSet, {
 			beforeToolCall: ({ toolName, toolCallId, input }) => {
-				for (const hook of pluginRegistry.getHooks()) {
-					const decision = hook.beforeToolCall?.({
-						toolName,
-						toolCallId,
-						input,
-						chatId,
-						userId,
-					});
-					if (decision && decision.allow === false) {
-						return {
-							allow: false,
-							reason: decision.reason ?? "plugin_blocked",
-						};
-					}
-				}
 				if (chatPolicy && !isToolAllowed(toolName, chatPolicy)) {
 					logger.info({
 						event: "tool_blocked",
@@ -1556,17 +1551,6 @@ export async function createBot(options: CreateBotOptions) {
 					duration_ms: durationMs,
 					error,
 				});
-				for (const hook of pluginRegistry.getHooks()) {
-					hook.afterToolCall?.({
-						toolName,
-						toolCallId,
-						input: null,
-						chatId,
-						userId,
-						durationMs,
-						error,
-					});
-				}
 			},
 		});
 		return wrapped;
@@ -1622,6 +1606,7 @@ export async function createBot(options: CreateBotOptions) {
 			recentCandidates: options?.recentCandidates,
 			history: options?.history,
 			userName: options?.userName,
+			systemPrompt: options?.ctx?.state.channelConfig?.systemPrompt,
 		});
 		const agentTools = await createAgentTools(options);
 		return new ToolLoopAgent({
@@ -2756,20 +2741,24 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("skills", async (ctx) => {
 		setLogContext(ctx, { command: "/skills", message_type: "command" });
-		if (!filteredRuntimeSkills.length) {
+		const channelSkills = filterSkillsForChannel(ctx, runtimeSkills);
+		const channelSupported = filterSkillsForChannel(ctx, filteredRuntimeSkills);
+		if (!channelSkills.length) {
 			await sendText(ctx, "Нет доступных runtime-skills.");
 			return;
 		}
-		const lines = filteredRuntimeSkills.map((skill) => {
+		const supported = new Set(channelSupported.map((skill) => skill.name));
+		const lines = channelSkills.map((skill) => {
 			const desc = skill.description ? ` - ${skill.description}` : "";
-			return `${skill.name}${desc}`;
+			const suffix = supported.has(skill.name) ? "" : " (blocked)";
+			return `${skill.name}${suffix}${desc}`;
 		});
 		await sendText(ctx, `Доступные runtime-skills:\n${lines.join("\n")}`);
 	});
 
 	bot.command("skill", async (ctx) => {
 		setLogContext(ctx, { command: "/skill", message_type: "command" });
-		if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+		if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
 			const allowReply =
 				ctx.message?.reply_to_message?.from?.id !== undefined &&
 				ctx.me?.id !== undefined &&
@@ -2785,7 +2774,8 @@ export async function createBot(options: CreateBotOptions) {
 			await sendText(ctx, "Использование: /skill <name> <json>");
 			return;
 		}
-		const skill = filteredRuntimeSkills.find((item) => item.name === skillName);
+		const channelSupported = filterSkillsForChannel(ctx, filteredRuntimeSkills);
+		const skill = channelSupported.find((item) => item.name === skillName);
 		if (!skill) {
 			await sendText(ctx, `Неизвестный skill: ${skillName}`);
 			return;
@@ -2917,7 +2907,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("tracker", async (ctx) => {
 		setLogContext(ctx, { command: "/tracker", message_type: "command" });
-		if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+		if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
 			const allowReply =
 				ctx.message?.reply_to_message?.from?.id !== undefined &&
 				ctx.me?.id !== undefined &&
@@ -3161,7 +3151,9 @@ export async function createBot(options: CreateBotOptions) {
 		stream: ReadableStream<UIMessageChunk>;
 	};
 
-	async function runLocalChat(options: LocalChatOptions): Promise<LocalChatResult> {
+	async function runLocalChat(
+		options: LocalChatOptions,
+	): Promise<LocalChatResult> {
 		const messages: string[] = [];
 		const chatId = options.chatId ?? "admin";
 		const userId = options.userId ?? "admin";
@@ -3272,7 +3264,7 @@ export async function createBot(options: CreateBotOptions) {
 				await sendText(ctx, "Доступ запрещен.");
 				return;
 			}
-			if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+			if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
 				const allowReply =
 					ctx.message?.reply_to_message?.from?.id !== undefined &&
 					ctx.me?.id !== undefined &&
@@ -3332,7 +3324,7 @@ export async function createBot(options: CreateBotOptions) {
 				await sendText(ctx, "Доступ запрещен.");
 				return;
 			}
-			if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+			if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
 				const allowReply =
 					ctx.message?.reply_to_message?.from?.id !== undefined &&
 					ctx.me?.id !== undefined &&
@@ -3866,7 +3858,7 @@ export async function createBot(options: CreateBotOptions) {
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 				return createTextStream("Доступ запрещен.");
 			}
-			if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+			if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
 				const allowReply =
 					ctx.message?.reply_to_message?.from?.id !== undefined &&
 					ctx.me?.id !== undefined &&
@@ -3907,7 +3899,11 @@ export async function createBot(options: CreateBotOptions) {
 						]);
 						return {
 							key,
-							issueText: JSON.stringify(normalizeJiraIssue(issueResult), null, 2),
+							issueText: JSON.stringify(
+								normalizeJiraIssue(issueResult),
+								null,
+								2,
+							),
 							commentsText: commentResult.text,
 						};
 					}),
@@ -4119,8 +4115,7 @@ export async function createBot(options: CreateBotOptions) {
 					defaultTimeoutMs: orchestrationPolicy.defaultTimeoutMs,
 					hooks: orchestrationPolicy.hooks,
 				});
-				orchestrationSummary =
-					buildOrchestrationSummary(orchestrationResult);
+				orchestrationSummary = buildOrchestrationSummary(orchestrationResult);
 			}
 			const mergedHistory = mergeHistoryBlocks(
 				historyText,
