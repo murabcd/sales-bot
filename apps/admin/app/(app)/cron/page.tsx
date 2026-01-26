@@ -843,11 +843,18 @@ export default function CronPage() {
 					) : (
 						<div className="space-y-3">
 							{jobs.map((job) => (
-								<button
-									type="button"
+								<div
 									key={job.id}
+									role="button"
+									tabIndex={0}
 									onClick={() => loadRuns(job.id)}
-									className={`w-full text-left border border-border/60 rounded-md p-4 ${
+									onKeyDown={(event) => {
+										if (event.key === "Enter" || event.key === " ") {
+											event.preventDefault();
+											void loadRuns(job.id);
+										}
+									}}
+									className={`w-full text-left border border-border/60 rounded-md p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
 										runsJobId === job.id ? "bg-muted/30" : ""
 									}`}
 								>
@@ -927,7 +934,7 @@ export default function CronPage() {
 											</div>
 										</div>
 									</div>
-								</button>
+								</div>
 							))}
 						</div>
 					)}
