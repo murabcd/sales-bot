@@ -21,6 +21,7 @@
 
 # Production
 /build
+/apps/bot/dist
 
 # Misc
 .DS_Store
