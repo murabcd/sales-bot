@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Clock, Loader2 } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGateway } from "@/components/gateway-provider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -157,7 +157,7 @@ export default function CronPage() {
 		cronRun,
 		cronRuns,
 	} = useGateway();
-	const [loading, setLoading] = useState(false);
+	const [, setLoading] = useState(false);
 	const [status, setStatus] = useState<CronStatus | null>(null);
 	const [jobs, setJobs] = useState<CronJob[]>([]);
 	const [error, setError] = useState<string | null>(null);
@@ -326,28 +326,7 @@ export default function CronPage() {
 	);
 
 	return (
-		<div className="space-y-6 pt-6">
-			<div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-				<div className="flex flex-col gap-2">
-					<div className="flex items-center gap-2">
-						<Clock className="size-4 text-primary" />
-						<h1 className="text-lg font-medium">Cron</h1>
-					</div>
-					<p className="text-sm text-[#666666] max-w-[720px]">
-						Scheduled automation status, targets, and job configuration.
-					</p>
-				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={refresh}
-					disabled={loading}
-				>
-					{loading ? <Loader2 className="size-4 animate-spin" /> : null}
-					Refresh
-				</Button>
-			</div>
-
+		<div className="space-y-6">
 			<section className="grid gap-4 md:grid-cols-2">
 				<Card>
 					<CardHeader>
@@ -359,15 +338,15 @@ export default function CronPage() {
 					<CardContent>
 						<div className="grid grid-cols-3 gap-4 text-sm">
 							<div>
-								<div className="text-xs text-[#666666]">Enabled</div>
+								<div className="text-xs text-muted-foreground">Enabled</div>
 								<div>{status ? (status.enabled ? "Yes" : "No") : "n/a"}</div>
 							</div>
 							<div>
-								<div className="text-xs text-[#666666]">Jobs</div>
+								<div className="text-xs text-muted-foreground">Jobs</div>
 								<div>{status?.jobs ?? "n/a"}</div>
 							</div>
 							<div>
-								<div className="text-xs text-[#666666]">Next wake</div>
+								<div className="text-xs text-muted-foreground">Next wake</div>
 								<div>{formatNextRun(status?.nextWakeAtMs ?? null)}</div>
 							</div>
 						</div>
@@ -389,7 +368,7 @@ export default function CronPage() {
 					</CardHeader>
 					<CardContent className="space-y-3">
 						<div className="grid gap-3 md:grid-cols-2">
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-name" className="block">
 									Name
 								</label>
@@ -401,7 +380,7 @@ export default function CronPage() {
 									}
 								/>
 							</div>
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-description" className="block">
 									Description
 								</label>
@@ -416,7 +395,7 @@ export default function CronPage() {
 									}
 								/>
 							</div>
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-agent-id" className="block">
 									Agent ID
 								</label>
@@ -432,7 +411,7 @@ export default function CronPage() {
 									}
 								/>
 							</div>
-							<div className="flex items-center gap-2 text-xs text-[#666666]">
+							<div className="flex items-center gap-2 text-xs text-muted-foreground">
 								<Checkbox
 									id="cron-enabled"
 									checked={form.enabled}
@@ -447,7 +426,7 @@ export default function CronPage() {
 									Enabled
 								</label>
 							</div>
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-schedule" className="block">
 									Schedule
 								</label>
@@ -473,7 +452,7 @@ export default function CronPage() {
 						</div>
 
 						{form.scheduleKind === "at" ? (
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-run-at" className="block">
 									Run at
 								</label>
@@ -492,7 +471,7 @@ export default function CronPage() {
 						) : null}
 						{form.scheduleKind === "every" ? (
 							<div className="grid gap-3 md:grid-cols-2">
-								<div className="space-y-1 text-xs text-[#666666]">
+								<div className="space-y-1 text-xs text-muted-foreground">
 									<label htmlFor="cron-every-amount" className="block">
 										Every
 									</label>
@@ -507,7 +486,7 @@ export default function CronPage() {
 										}
 									/>
 								</div>
-								<div className="space-y-1 text-xs text-[#666666]">
+								<div className="space-y-1 text-xs text-muted-foreground">
 									<label htmlFor="cron-every-unit" className="block">
 										Unit
 									</label>
@@ -534,7 +513,7 @@ export default function CronPage() {
 						) : null}
 						{form.scheduleKind === "cron" ? (
 							<div className="grid gap-3 md:grid-cols-2">
-								<div className="space-y-1 text-xs text-[#666666]">
+								<div className="space-y-1 text-xs text-muted-foreground">
 									<label htmlFor="cron-expr" className="block">
 										Expression
 									</label>
@@ -549,7 +528,7 @@ export default function CronPage() {
 										}
 									/>
 								</div>
-								<div className="space-y-1 text-xs text-[#666666]">
+								<div className="space-y-1 text-xs text-muted-foreground">
 									<label htmlFor="cron-tz" className="block">
 										Timezone (optional)
 									</label>
@@ -568,7 +547,7 @@ export default function CronPage() {
 						) : null}
 
 						<div className="grid gap-3 md:grid-cols-2">
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-session" className="block">
 									Session
 								</label>
@@ -590,7 +569,7 @@ export default function CronPage() {
 									</SelectContent>
 								</Select>
 							</div>
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-wake-mode" className="block">
 									Wake mode
 								</label>
@@ -614,7 +593,7 @@ export default function CronPage() {
 									</SelectContent>
 								</Select>
 							</div>
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-payload" className="block">
 									Payload
 								</label>
@@ -640,7 +619,7 @@ export default function CronPage() {
 						</div>
 
 						{form.payloadKind !== "dailyStatus" ? (
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-payload-text" className="block">
 									{form.payloadKind === "systemEvent"
 										? "System text"
@@ -659,14 +638,14 @@ export default function CronPage() {
 								/>
 							</div>
 						) : (
-							<div className="rounded-md border border-dashed border-[#e4e4e7] px-3 py-2 text-xs text-[#666666]">
+							<div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
 								Uses Settings → Cron & summary for Jira + OpenAI config.
 							</div>
 						)}
 
 						{form.payloadKind === "agentTurn" ||
 						form.payloadKind === "dailyStatus" ? (
-							<div className="space-y-1 text-xs text-[#666666]">
+							<div className="space-y-1 text-xs text-muted-foreground">
 								<label htmlFor="cron-to" className="block">
 									To
 								</label>
@@ -687,7 +666,7 @@ export default function CronPage() {
 
 						{form.payloadKind === "agentTurn" ? (
 							<div className="grid gap-3 md:grid-cols-2">
-								<div className="space-y-1 text-xs text-[#666666]">
+								<div className="space-y-1 text-xs text-muted-foreground">
 									<label htmlFor="cron-model" className="block">
 										Model override
 									</label>
@@ -703,7 +682,7 @@ export default function CronPage() {
 										}
 									/>
 								</div>
-								<div className="flex items-center gap-2 text-xs text-[#666666]">
+								<div className="flex items-center gap-2 text-xs text-muted-foreground">
 									<Checkbox
 										id="cron-deliver"
 										checked={form.deliver}
@@ -718,7 +697,7 @@ export default function CronPage() {
 										Deliver
 									</label>
 								</div>
-								<div className="space-y-1 text-xs text-[#666666]">
+								<div className="space-y-1 text-xs text-muted-foreground">
 									<label htmlFor="cron-channel" className="block">
 										Channel
 									</label>
@@ -746,7 +725,7 @@ export default function CronPage() {
 										</SelectContent>
 									</Select>
 								</div>
-								<div className="space-y-1 text-xs text-[#666666]">
+								<div className="space-y-1 text-xs text-muted-foreground">
 									<label htmlFor="cron-timeout" className="block">
 										Timeout (seconds)
 									</label>
@@ -763,7 +742,7 @@ export default function CronPage() {
 								</div>
 								{form.sessionTarget === "isolated" ? (
 									<>
-										<div className="space-y-1 text-xs text-[#666666]">
+										<div className="space-y-1 text-xs text-muted-foreground">
 											<label htmlFor="cron-post-main" className="block">
 												Post to main prefix
 											</label>
@@ -778,7 +757,7 @@ export default function CronPage() {
 												}
 											/>
 										</div>
-										<div className="space-y-1 text-xs text-[#666666]">
+										<div className="space-y-1 text-xs text-muted-foreground">
 											<label htmlFor="cron-post-main-mode" className="block">
 												Post to main mode
 											</label>
@@ -801,7 +780,7 @@ export default function CronPage() {
 												</SelectContent>
 											</Select>
 										</div>
-										<div className="space-y-1 text-xs text-[#666666]">
+										<div className="space-y-1 text-xs text-muted-foreground">
 											<label htmlFor="cron-post-main-max" className="block">
 												Post to main max chars
 											</label>
@@ -839,29 +818,37 @@ export default function CronPage() {
 				</CardHeader>
 				<CardContent className="space-y-3">
 					{jobs.length === 0 ? (
-						<div className="text-sm text-[#666666]">No jobs yet.</div>
+						<div className="text-sm text-muted-foreground">No jobs yet.</div>
 					) : (
 						<div className="space-y-3">
 							{jobs.map((job) => (
-								<button
-									type="button"
+								// biome-ignore lint/a11y/useSemanticElements: div with role=button needed to avoid nested button elements
+								<div
 									key={job.id}
+									role="button"
+									tabIndex={0}
 									onClick={() => loadRuns(job.id)}
-									className={`w-full text-left border border-border/60 rounded-md p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+									onKeyDown={(e) => {
+										if (e.key === "Enter" || e.key === " ") {
+											e.preventDefault();
+											loadRuns(job.id);
+										}
+									}}
+									className={`w-full text-left border border-border/60 rounded-md p-4 cursor-pointer hover:bg-muted/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
 										runsJobId === job.id ? "bg-muted/30" : ""
 									}`}
 								>
 									<div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
 										<div className="space-y-1">
 											<div className="text-sm font-medium">{job.name}</div>
-											<div className="text-xs text-[#666666]">
+											<div className="text-xs text-muted-foreground">
 												{formatCronSchedule(job)}
 											</div>
-											<div className="text-xs text-[#666666]">
+											<div className="text-xs text-muted-foreground">
 												{formatCronPayload(job)}
 											</div>
 											{job.agentId ? (
-												<div className="text-xs text-[#666666]">
+												<div className="text-xs text-muted-foreground">
 													Agent: {job.agentId}
 												</div>
 											) : null}
@@ -872,7 +859,7 @@ export default function CronPage() {
 											</div>
 										</div>
 										<div className="space-y-2 text-right">
-											<div className="text-xs text-[#666666]">
+											<div className="text-xs text-muted-foreground">
 												{formatCronState(job)}
 											</div>
 											<div className="flex flex-wrap justify-end gap-2">
@@ -881,7 +868,6 @@ export default function CronPage() {
 													size="sm"
 													disabled={busy}
 													onClick={(event) => {
-														event.preventDefault();
 														event.stopPropagation();
 														void toggleJob(job, !job.enabled);
 													}}
@@ -893,7 +879,6 @@ export default function CronPage() {
 													size="sm"
 													disabled={busy}
 													onClick={(event) => {
-														event.preventDefault();
 														event.stopPropagation();
 														void runJob(job);
 													}}
@@ -905,7 +890,6 @@ export default function CronPage() {
 													size="sm"
 													disabled={busy}
 													onClick={(event) => {
-														event.preventDefault();
 														event.stopPropagation();
 														void loadRuns(job.id);
 													}}
@@ -917,7 +901,6 @@ export default function CronPage() {
 													size="sm"
 													disabled={busy}
 													onClick={(event) => {
-														event.preventDefault();
 														event.stopPropagation();
 														void removeJob(job);
 													}}
@@ -927,7 +910,7 @@ export default function CronPage() {
 											</div>
 										</div>
 									</div>
-								</button>
+								</div>
 							))}
 						</div>
 					)}
@@ -943,11 +926,11 @@ export default function CronPage() {
 				</CardHeader>
 				<CardContent className="space-y-3">
 					{runsJobId == null ? (
-						<div className="text-sm text-[#666666]">
+						<div className="text-sm text-muted-foreground">
 							Select a job to inspect run history.
 						</div>
 					) : runs.length === 0 ? (
-						<div className="text-sm text-[#666666]">No runs yet.</div>
+						<div className="text-sm text-muted-foreground">No runs yet.</div>
 					) : (
 						<div className="space-y-2">
 							{runs.map((entry) => (
@@ -957,11 +940,11 @@ export default function CronPage() {
 								>
 									<div>
 										<div className="text-sm font-medium">{entry.status}</div>
-										<div className="text-xs text-[#666666]">
+										<div className="text-xs text-muted-foreground">
 											{entry.summary ?? ""}
 										</div>
 									</div>
-									<div className="text-xs text-[#666666] md:text-right">
+									<div className="text-xs text-muted-foreground md:text-right">
 										<div>{formatMs(entry.ts)}</div>
 										<div>{formatDurationMs(entry.durationMs ?? 0)}</div>
 										{entry.error ? <div>{entry.error}</div> : null}

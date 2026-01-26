@@ -21,7 +21,7 @@ export function AppHeader() {
 			<div className="flex items-center gap-3 px-4">
 				<SidebarTrigger className="-ml-1" />
 				<div className="h-4 w-px bg-border" />
-				<h1 className="text-sm font-medium">{title}</h1>
+				<span className="text-sm font-medium">{title}</span>
 			</div>
 		</header>
 	);

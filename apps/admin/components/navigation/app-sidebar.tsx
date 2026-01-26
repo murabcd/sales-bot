@@ -54,17 +54,10 @@ export function AppSidebar() {
 			<SidebarHeader className="h-14 border-b border-border justify-center">
 				<SidebarMenu>
 					<SidebarMenuItem>
-						<SidebarMenuButton size="lg" asChild className="h-10">
+						<SidebarMenuButton asChild>
 							<Link href="/">
-								<div className="flex aspect-square size-8 items-center justify-center">
-									<Icons.omniLogo className="size-5" />
-								</div>
-								<div className="grid flex-1 text-left text-sm leading-tight">
-									<span className="truncate font-medium">Omni</span>
-									<span className="truncate text-xs text-muted-foreground">
-										Gateway
-									</span>
-								</div>
+								<Icons.omniLogo className="size-4" />
+								<span className="truncate font-semibold">Omni</span>
 							</Link>
 						</SidebarMenuButton>
 					</SidebarMenuItem>

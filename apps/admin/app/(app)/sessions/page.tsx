@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Loader2, Users } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGateway } from "@/components/gateway-provider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -202,30 +202,9 @@ export default function SessionsPage() {
 	);
 
 	return (
-		<div className="space-y-6 pt-6">
-			<div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-				<div className="flex flex-col gap-2">
-					<div className="flex items-center gap-2">
-						<Users className="size-4 text-primary" />
-						<h1 className="text-lg font-medium">Sessions</h1>
-					</div>
-					<p className="text-sm text-[#666666] max-w-[720px]">
-						Active session keys and per-session overrides.
-					</p>
-				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={loadSessions}
-					disabled={loading}
-				>
-					{loading ? <Loader2 className="size-4 animate-spin" /> : null}
-					Refresh
-				</Button>
-			</div>
-
-			<div className="grid gap-3 md:grid-cols-6">
-				<div className="space-y-1 text-xs text-[#666666]">
+		<div className="space-y-6">
+			<div className="grid gap-3 md:grid-cols-5">
+				<div className="space-y-1 text-xs text-muted-foreground">
 					<label htmlFor="active-minutes" className="block">
 						Active within (minutes)
 					</label>
@@ -235,7 +214,7 @@ export default function SessionsPage() {
 						onChange={(event) => setActiveMinutes(event.target.value)}
 					/>
 				</div>
-				<div className="space-y-1 text-xs text-[#666666]">
+				<div className="space-y-1 text-xs text-muted-foreground">
 					<label htmlFor="limit" className="block">
 						Limit
 					</label>
@@ -245,7 +224,7 @@ export default function SessionsPage() {
 						onChange={(event) => setLimit(event.target.value)}
 					/>
 				</div>
-				<div className="space-y-1 text-xs text-[#666666]">
+				<div className="space-y-1 text-xs text-muted-foreground">
 					<label htmlFor="label-filter" className="block">
 						Label
 					</label>
@@ -255,7 +234,7 @@ export default function SessionsPage() {
 						onChange={(event) => setLabelFilter(event.target.value)}
 					/>
 				</div>
-				<div className="space-y-1 text-xs text-[#666666]">
+				<div className="space-y-1 text-xs text-muted-foreground">
 					<label htmlFor="spawned-by-filter" className="block">
 						Spawned by
 					</label>
@@ -265,7 +244,7 @@ export default function SessionsPage() {
 						onChange={(event) => setSpawnedByFilter(event.target.value)}
 					/>
 				</div>
-				<div className="space-y-1 text-xs text-[#666666]">
+				<div className="space-y-1 text-xs text-muted-foreground">
 					<label htmlFor="agent-id-filter" className="block">
 						Agent ID
 					</label>
@@ -275,7 +254,10 @@ export default function SessionsPage() {
 						onChange={(event) => setAgentIdFilter(event.target.value)}
 					/>
 				</div>
-				<div className="flex items-center gap-2 text-xs text-[#666666]">
+			</div>
+
+			<div className="flex items-center gap-6 text-xs text-muted-foreground">
+				<div className="flex items-center gap-2">
 					<Checkbox
 						id="include-global"
 						checked={filters.includeGlobal}
@@ -285,7 +267,7 @@ export default function SessionsPage() {
 						Include global
 					</label>
 				</div>
-				<div className="flex items-center gap-2 text-xs text-[#666666]">
+				<div className="flex items-center gap-2">
 					<Checkbox
 						id="include-unknown"
 						checked={filters.includeUnknown}
@@ -305,7 +287,7 @@ export default function SessionsPage() {
 			) : null}
 
 			{storePath ? (
-				<div className="text-xs text-[#666666]">Store: {storePath}</div>
+				<div className="text-xs text-muted-foreground">Store: {storePath}</div>
 			) : null}
 
 			<div className="rounded-md border border-border/60">
@@ -326,7 +308,10 @@ export default function SessionsPage() {
 					<TableBody>
 						{rows.length === 0 ? (
 							<TableRow>
-								<TableCell colSpan={9} className="text-sm text-[#666666]">
+								<TableCell
+									colSpan={9}
+									className="text-sm text-muted-foreground"
+								>
 									No sessions found.
 								</TableCell>
 							</TableRow>

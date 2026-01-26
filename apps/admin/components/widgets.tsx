@@ -5,7 +5,6 @@ import {
 	AlertCircle,
 	Clock,
 	Loader2,
-	RefreshCw,
 	Server,
 	Shield,
 	Trophy,
@@ -82,7 +81,6 @@ export function Widgets() {
 								onClick={connect}
 								disabled={loading}
 							>
-								<RefreshCw className="size-3" />
 								Refresh
 							</Button>
 						</div>
@@ -104,15 +102,12 @@ export function Widgets() {
 				>
 					<div className="flex flex-col gap-2">
 						<Badge
-							className={
-								isConnected
-									? "w-fit border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-									: "w-fit border-rose-500/40 text-rose-400 bg-rose-500/10"
-							}
+							variant={isConnected ? "success" : "error"}
+							className="w-fit"
 						>
 							{isConnected ? "connected" : "disconnected"}
 						</Badge>
-						<div className="text-xs text-[#666666] space-y-0.5">
+						<div className="text-xs text-muted-foreground space-y-0.5">
 							<p>uptime: {uptime}s</p>
 							<p>tick interval: -</p>
 							<p>last channels refresh: -</p>
@@ -128,7 +123,7 @@ export function Widgets() {
 					value={instanceCount}
 					className="lg:col-span-2"
 				>
-					<div className="text-xs text-[#666666] space-y-0.5">
+					<div className="text-xs text-muted-foreground space-y-0.5">
 						<p>primary: {status?.instanceId ?? "unknown"}</p>
 						<p>region: {status?.region ?? "unknown"}</p>
 					</div>
@@ -142,7 +137,7 @@ export function Widgets() {
 					value="-"
 					className="lg:col-span-2"
 				>
-					<div className="text-xs text-[#666666] space-y-0.5">
+					<div className="text-xs text-muted-foreground space-y-0.5">
 						<p>streaming: -</p>
 						<p>history: -</p>
 					</div>
@@ -156,7 +151,7 @@ export function Widgets() {
 					value={status?.cron?.enabled ? "scheduled" : "off"}
 					className="lg:col-span-2"
 				>
-					<div className="text-xs text-[#666666] space-y-0.5">
+					<div className="text-xs text-muted-foreground space-y-0.5">
 						<p>timezone: {status?.cron?.timezone ?? "-"}</p>
 						<p>next: -</p>
 					</div>
@@ -170,7 +165,7 @@ export function Widgets() {
 					value={serviceName}
 					className="lg:col-span-2"
 				>
-					<div className="text-xs text-[#666666] space-y-0.5">
+					<div className="text-xs text-muted-foreground space-y-0.5">
 						<p>region: {status?.region ?? "unknown"}</p>
 						<p>uptime: {uptime}s</p>
 						<p>version: {status?.version ?? "unknown"}</p>

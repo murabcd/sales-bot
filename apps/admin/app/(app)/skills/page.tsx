@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Loader2, Trophy } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGateway } from "@/components/gateway-provider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -30,7 +30,7 @@ function clamp(text: string, max = 140) {
 
 export default function SkillsPage() {
 	const { skillsStatus, skillsUpdate, skillsInstall } = useGateway();
-	const [loading, setLoading] = useState(false);
+	const [, setLoading] = useState(false);
 	const [report, setReport] = useState<SkillStatusReport | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [filter, setFilter] = useState("");
@@ -140,29 +140,7 @@ export default function SkillsPage() {
 	};
 
 	return (
-		<div className="space-y-6 pt-6">
-			<div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-				<div className="flex flex-col gap-2">
-					<div className="flex items-center gap-2">
-						<Trophy className="size-4 text-primary" />
-						<h1 className="text-lg font-medium">Skills</h1>
-					</div>
-					<p className="text-sm text-[#666666] max-w-[720px]">
-						Bundled, managed, and workspace skills with eligibility checks and
-						global credential requirements.
-					</p>
-				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => loadSkills(true)}
-					disabled={loading}
-				>
-					{loading ? <Loader2 className="size-4 animate-spin" /> : null}
-					Refresh
-				</Button>
-			</div>
-
+		<div className="space-y-6">
 			<div className="flex flex-col gap-3 md:flex-row md:items-center">
 				<div className="flex-1 max-w-[420px]">
 					<Input
@@ -172,7 +150,9 @@ export default function SkillsPage() {
 						onChange={(event) => setFilter(event.target.value)}
 					/>
 				</div>
-				<div className="text-xs text-[#666666]">{filtered.length} shown</div>
+				<div className="text-xs text-muted-foreground">
+					{filtered.length} shown
+				</div>
 			</div>
 
 			{error ? (
@@ -183,12 +163,12 @@ export default function SkillsPage() {
 			) : null}
 
 			{filtered.length === 0 ? (
-				<p className="text-sm text-[#666666]">No skills found.</p>
+				<p className="text-sm text-muted-foreground">No skills found.</p>
 			) : (
 				<div className="space-y-6">
 					{grouped.map(([server, items]) => (
 						<div key={server} className="space-y-3">
-							<div className="text-xs uppercase tracking-wide text-[#666666]">
+							<div className="text-xs uppercase tracking-wide text-muted-foreground">
 								{server}
 							</div>
 							{items.map((skill) => {
@@ -219,31 +199,23 @@ export default function SkillsPage() {
 														{clamp(skill.description || "", 160)}
 													</CardDescription>
 													<div className="flex flex-wrap gap-2">
-														<Badge className="border-border bg-transparent text-[#666666]">
-															{skill.source}
-														</Badge>
+														<Badge variant="muted">{skill.source}</Badge>
 														<Badge
-															className={
-																skill.eligible
-																	? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-																	: "border-amber-500/40 text-amber-400 bg-amber-500/10"
-															}
+															variant={skill.eligible ? "success" : "warning"}
 														>
 															{skill.eligible ? "eligible" : "blocked"}
 														</Badge>
 														{skill.disabled ? (
-															<Badge className="border-amber-500/40 text-amber-400 bg-amber-500/10">
-																disabled
-															</Badge>
+															<Badge variant="warning">disabled</Badge>
 														) : null}
 													</div>
 													{missing.length > 0 ? (
-														<p className="text-xs text-[#666666]">
+														<p className="text-xs text-muted-foreground">
 															Missing: {missing.join(", ")}
 														</p>
 													) : null}
 													{reasons.length > 0 ? (
-														<p className="text-xs text-[#666666]">
+														<p className="text-xs text-muted-foreground">
 															Reason: {reasons.join(", ")}
 														</p>
 													) : null}
@@ -291,7 +263,7 @@ export default function SkillsPage() {
 										</CardHeader>
 										<CardContent>
 											{skill.missing.env.length > 0 ? (
-												<p className="text-xs text-[#666666]">
+												<p className="text-xs text-muted-foreground">
 													Set global env values to satisfy requirements.
 												</p>
 											) : null}

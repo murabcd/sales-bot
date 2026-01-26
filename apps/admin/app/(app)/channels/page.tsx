@@ -1,10 +1,8 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useGateway } from "@/components/gateway-provider";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
@@ -82,26 +80,8 @@ export default function ChannelsPage() {
 	);
 
 	return (
-		<div className="space-y-6 pt-6">
-			<div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-				<div className="flex flex-col gap-2">
-					<h1 className="text-lg font-medium">Channels</h1>
-					<p className="text-sm text-[#666666] max-w-[720px]">
-						Known chats and groups where the bot has been active.
-					</p>
-				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={loadChannels}
-					disabled={loading}
-				>
-					{loading ? <Loader2 className="size-4 animate-spin" /> : null}
-					Refresh
-				</Button>
-			</div>
-
-			<div className="flex items-center gap-2 text-xs text-[#666666]">
+		<div className="space-y-6">
+			<div className="flex items-center gap-2 text-xs text-muted-foreground">
 				<Checkbox
 					id="include-disabled"
 					checked={includeDisabled}
@@ -138,7 +118,10 @@ export default function ChannelsPage() {
 					<TableBody>
 						{rows.length === 0 ? (
 							<TableRow>
-								<TableCell colSpan={11} className="text-sm text-[#666666]">
+								<TableCell
+									colSpan={11}
+									className="text-sm text-muted-foreground"
+								>
 									No channels found.
 								</TableCell>
 							</TableRow>

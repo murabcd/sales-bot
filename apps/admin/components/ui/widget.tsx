@@ -29,13 +29,15 @@ export function Widget({
 			<div>
 				<div className="flex items-center justify-between mb-3">
 					<div className="flex items-center gap-2">
-						{icon && <span className="text-[#666666]">{icon}</span>}
-						<h3 className="text-xs text-[#666666] font-medium">{title}</h3>
+						{icon && <span className="text-muted-foreground">{icon}</span>}
+						<h3 className="text-xs text-muted-foreground font-medium">
+							{title}
+						</h3>
 					</div>
 				</div>
 
 				{typeof description === "string" ? (
-					<p className="text-sm text-[#666666]">{description}</p>
+					<p className="text-sm text-muted-foreground">{description}</p>
 				) : (
 					description
 				)}
@@ -45,7 +47,7 @@ export function Widget({
 				{value && <h2 className="text-2xl font-normal mb-2">{value}</h2>}
 				{children}
 				{actions && (
-					<span className="text-xs text-[#666666] group-hover:text-primary transition-colors duration-300">
+					<span className="text-xs text-muted-foreground group-hover:text-primary transition-colors duration-300">
 						{actions}
 					</span>
 				)}
@@ -126,12 +128,14 @@ export function MetricCard({
 			)}
 		>
 			<div className="mb-4">
-				<h3 className="text-sm font-normal text-[#666666] mb-1">{title}</h3>
+				<h3 className="text-sm font-normal text-muted-foreground mb-1">
+					{title}
+				</h3>
 				{value && <p className="text-3xl font-normal">{value}</p>}
 			</div>
 			{children}
 			{footer && (
-				<div className="mt-auto pt-4 border-t border-border text-xs text-[#666666]">
+				<div className="mt-auto pt-4 border-t border-border text-xs text-muted-foreground">
 					{footer}
 				</div>
 			)}

@@ -27,7 +27,7 @@ interface FieldProps {
 function Field({ label, value, placeholder, type, onChange }: FieldProps) {
 	return (
 		<div className="space-y-2">
-			<Label className="text-sm text-[#606060]">{label}</Label>
+			<Label className="text-sm text-muted-foreground">{label}</Label>
 			<Input
 				value={value}
 				placeholder={placeholder}
@@ -44,7 +44,7 @@ export default function SettingsPage() {
 		useGateway();
 
 	return (
-		<div className="max-w-[900px] pt-6">
+		<div className="max-w-[900px]">
 			<Tabs defaultValue="telegram" className="w-full">
 				<TabsList>
 					<TabsTrigger value="telegram">Telegram</TabsTrigger>
@@ -222,7 +222,7 @@ export default function SettingsPage() {
 				<div className="flex items-center justify-between">
 					<div className="space-y-1">
 						<p className="text-sm font-medium">Save all changes</p>
-						<p className="text-xs text-[#606060]">
+						<p className="text-xs text-muted-foreground">
 							Apply the configuration changes to the gateway.
 						</p>
 					</div>
