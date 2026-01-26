@@ -1,15 +1,18 @@
 {
-  "name": "@omni/worker",
-  "private": true,
-  "version": "0.1.0",
-  "scripts": {
-    "dev": "bunx wrangler dev --config ../../worker/wrangler.toml",
-    "deploy": "bunx wrangler deploy --config ../../worker/wrangler.toml",
-    "test": "vitest run --config vitest.config.ts"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260124.0",
-    "@types/node": "^22.19.7",
-    "vitest": "^4.0.18"
-  }
+	"name": "@omni/worker",
+	"private": true,
+	"version": "0.1.0",
+	"scripts": {
+		"dev": "bunx wrangler dev --config ../../worker/wrangler.toml",
+		"deploy": "bunx wrangler deploy --config ../../worker/wrangler.toml",
+		"test": "vitest run --config vitest.config.ts"
+	},
+	"dependencies": {
+		"croner": "^9.0.0"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260124.0",
+		"@types/node": "^22.15.21",
+		"vitest": "^4.0.18"
+	}
 }
