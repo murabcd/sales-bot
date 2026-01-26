@@ -21,6 +21,18 @@ class_name = "TelegramUpdatesDO"
 name = "GATEWAY_CONFIG_DO"
 class_name = "GatewayConfigDO"
 
+[[durable_objects.bindings]]
+name = "SESSIONS_DO"
+class_name = "SessionsDO"
+
+[[durable_objects.bindings]]
+name = "CRON_DO"
+class_name = "CronDO"
+
+[[durable_objects.bindings]]
+name = "CHANNELS_DO"
+class_name = "ChannelsDO"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TelegramUpdatesDO"]
@@ -28,3 +40,11 @@ new_sqlite_classes = ["TelegramUpdatesDO"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["GatewayConfigDO"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["SessionsDO", "CronDO"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["ChannelsDO"]

@@ -5,18 +5,15 @@ type AdminStatus = {
 	region: string;
 	instanceId: string;
 	uptimeSeconds: number;
+	sessions?: {
+		gatewayConnections: number;
+		activeStreams: number;
+	};
 	admin: {
 		authRequired: boolean;
 		allowlist: string[];
 	};
-	gateway: {
-		plugins: {
-			configured: string[];
-			allowlist: string[];
-			denylist: string[];
-			active: string[];
-		};
-	};
+	gateway?: undefined;
 	cron: {
 		enabled: boolean;
 		chatId: string;
@@ -54,19 +51,9 @@ function authorizeGatewayToken(params: {
 function buildAdminStatusPayload(params: {
 	env: Record<string, string | undefined>;
 	uptimeSeconds: number;
+	sessions?: { gatewayConnections: number; activeStreams: number };
 }): AdminStatus {
 	const env = params.env;
-	const pluginIds = parseList(env.GATEWAY_PLUGINS).map((id) => id.toLowerCase());
-	const allowlist = parseList(env.GATEWAY_PLUGINS_ALLOWLIST).map((id) =>
-		id.toLowerCase(),
-	);
-	const denylist = parseList(env.GATEWAY_PLUGINS_DENYLIST).map((id) =>
-		id.toLowerCase(),
-	);
-	const activePlugins =
-		allowlist.length > 0
-			? pluginIds.filter((id) => allowlist.includes(id))
-			: pluginIds.filter((id) => !denylist.includes(id));
 	return {
 		serviceName: env.SERVICE_NAME ?? "omni",
 		version: env.RELEASE_VERSION ?? "dev",
@@ -74,17 +61,10 @@ function buildAdminStatusPayload(params: {
 		region: env.REGION ?? "local",
 		instanceId: env.INSTANCE_ID ?? "local",
 		uptimeSeconds: params.uptimeSeconds,
+		sessions: params.sessions,
 		admin: {
 			authRequired: Boolean(env.ADMIN_API_TOKEN?.trim()),
 			allowlist: parseList(env.ADMIN_ALLOWLIST),
-		},
-		gateway: {
-			plugins: {
-				configured: pluginIds,
-				allowlist,
-				denylist,
-				active: activePlugins,
-			},
 		},
 		cron: {
 			enabled: env.CRON_STATUS_ENABLED === "1",

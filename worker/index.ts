@@ -23,23 +23,34 @@ import {
 	buildAdminStatusPayload,
 	parseList,
 } from "./lib/gateway.js";
-import { loadGatewayPlugins } from "../apps/bot/src/lib/gateway/plugins.js";
+import {
+	SKILLS_CONFIG_KEY,
+	buildSkillsStatusReport,
+	parseSkillsConfig,
+	serializeSkillsConfig,
+} from "./lib/skills.js";
 import { allowTelegramUpdate } from "../apps/bot/src/lib/gateway/telegram-allowlist.js";
 import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
 import { markdownToTelegramHtmlChunks } from "../apps/bot/src/lib/telegram/format.js";
+import { CronDO } from "./cron-do.js";
+import { ChannelsDO } from "./channels-do.js";
+import { SessionsDO } from "./sessions-do.js";
 
 const startTime = Date.now();
 
 type Env = Record<string, string | undefined> & {
 	UPDATES_DO: DurableObjectNamespace;
 	GATEWAY_CONFIG_DO: DurableObjectNamespace;
+	SESSIONS_DO: DurableObjectNamespace;
+	CRON_DO: DurableObjectNamespace;
+	CHANNELS_DO: DurableObjectNamespace;
 };
 
 type BotRuntime = Awaited<ReturnType<typeof createBot>>;
 
 let botPromise: Promise<BotRuntime> | null = null;
-let gatewayHooks: ReturnType<typeof loadGatewayPlugins> | null = null;
 const streamAbortControllers = new Map<string, AbortController>();
+let activeGatewayConnections = 0;
 
 export function registerStreamAbort(
 	registry: Map<string, AbortController>,
@@ -81,12 +92,181 @@ async function getBot(env: Record<string, string | undefined>) {
 	return botPromise;
 }
 
-function getGatewayHooks(env: Record<string, string | undefined>) {
-	if (!gatewayHooks) {
-		gatewayHooks = loadGatewayPlugins(env);
-	}
-	return gatewayHooks;
+function getSessionsStub(env: Env) {
+	const id = env.SESSIONS_DO.idFromName("sessions");
+	return env.SESSIONS_DO.get(id);
 }
+
+function getCronStub(env: Env) {
+	const id = env.CRON_DO.idFromName("cron");
+	return env.CRON_DO.get(id);
+}
+
+function getChannelsStub(env: Env) {
+	const id = env.CHANNELS_DO.idFromName("channels");
+	return env.CHANNELS_DO.get(id);
+}
+
+async function callSessions(
+	env: Env,
+	path: string,
+	params: Record<string, unknown>,
+) {
+	const stub = getSessionsStub(env);
+	return withTimeout(
+		stub.fetch(`https://do${path}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(params),
+		}),
+		5_000,
+	);
+}
+
+async function callCron(env: Env, path: string, params: Record<string, unknown>) {
+	const stub = getCronStub(env);
+	return withTimeout(
+		stub.fetch(`https://do${path}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(params),
+		}),
+		5_000,
+	);
+}
+
+async function callChannels(
+	env: Env,
+	path: string,
+	params: Record<string, unknown>,
+) {
+	const stub = getChannelsStub(env);
+	return withTimeout(
+		stub.fetch(`https://do${path}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(params),
+		}),
+		5_000,
+	);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			reject(new Error("timeout"));
+		}, timeoutMs);
+	});
+	try {
+		return await Promise.race([promise, timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+function mapTelegramKind(kind?: string) {
+	if (kind === "private") return "direct";
+	if (kind === "group" || kind === "supergroup") return "group";
+	if (kind === "channel") return "group";
+	return "unknown";
+}
+
+function resolveTelegramSession(update: Update) {
+	const payload = (update as Update & Record<string, unknown>) ?? {};
+	const message =
+		(payload.message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.edited_message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.edited_channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.callback_query as { message?: { chat?: { id?: number; type?: string; title?: string } } } | undefined)?.message ??
+		undefined;
+	const chat = message?.chat;
+	if (!chat?.id) return null;
+	const chatId = String(chat.id);
+	const kind = mapTelegramKind(chat.type);
+	const title = typeof chat.title === "string" ? chat.title.trim() : "";
+	return {
+		key: `telegram:${chatId}`,
+		kind,
+		surface: "telegram",
+		displayName: title || chatId,
+		label: title || undefined,
+	};
+}
+
+function resolveTelegramChannel(update: Update) {
+	const payload = (update as Update & Record<string, unknown>) ?? {};
+	const message =
+		(payload.message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.edited_message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.edited_channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
+		(payload.callback_query as { message?: { chat?: { id?: number; type?: string; title?: string } } } | undefined)?.message ??
+		undefined;
+	const chat = message?.chat;
+	if (!chat?.id) return null;
+	const chatId = String(chat.id);
+	const kind = mapTelegramKind(chat.type);
+	const title = typeof chat.title === "string" ? chat.title.trim() : "";
+	return {
+		key: `telegram:${chatId}`,
+		chatId,
+		kind,
+		surface: "telegram",
+		title: title || undefined,
+		label: title || undefined,
+	};
+}
+
+async function touchTelegramSession(env: Env, update: Update) {
+	const session = resolveTelegramSession(update);
+	if (!session) return;
+	await callSessions(env, "/touch", session);
+}
+
+async function touchTelegramChannel(env: Env, update: Update) {
+	const channel = resolveTelegramChannel(update);
+	if (!channel) return { enabled: true };
+	const response = await callChannels(env, "/touch", channel);
+	if (!response.ok) return { enabled: true };
+	const payload = (await response.json()) as {
+		entry?: {
+			enabled?: boolean;
+			requireMention?: boolean;
+			allowUserIds?: string[];
+			skillsAllowlist?: string[];
+			skillsDenylist?: string[];
+			systemPrompt?: string;
+		};
+	};
+	return {
+		enabled: payload?.entry?.enabled !== false,
+		config: payload?.entry,
+	};
+}
+
+async function touchAdminSession(params: {
+	env: Env;
+	chatId: string;
+	chatType?: "private" | "group" | "supergroup" | "channel";
+	userName?: string;
+}) {
+	const kind =
+		params.chatType === "group" ||
+		params.chatType === "supergroup" ||
+		params.chatType === "channel"
+			? "group"
+			: "direct";
+	await callSessions(params.env, "/touch", {
+		key: `admin:${params.chatId}`,
+		kind,
+		surface: "admin",
+		displayName: params.userName?.trim() || params.chatId,
+		label: params.userName?.trim() || undefined,
+	});
+}
+
 
 function extractClientIp(request: WorkerRequest) {
 	return (
@@ -99,20 +279,28 @@ function extractClientIp(request: WorkerRequest) {
 async function readGatewayConfig(env: Env): Promise<GatewayConfig> {
 	const id = env.GATEWAY_CONFIG_DO.idFromName("gateway-config");
 	const stub = env.GATEWAY_CONFIG_DO.get(id);
-	const response = await stub.fetch("https://do/config");
-	if (!response.ok) return {};
-	const payload = (await response.json()) as { config?: GatewayConfig };
-	return payload.config ?? {};
+	try {
+		const response = await withTimeout(stub.fetch("https://do/config"), 5_000);
+		if (!response.ok) return {};
+		const payload = (await response.json()) as { config?: GatewayConfig };
+		return payload.config ?? {};
+	} catch (error) {
+		console.error("gateway_config_read_error", error);
+		return {};
+	}
 }
 
 async function writeGatewayConfig(env: Env, config: GatewayConfig) {
 	const id = env.GATEWAY_CONFIG_DO.idFromName("gateway-config");
 	const stub = env.GATEWAY_CONFIG_DO.get(id);
-	const response = await stub.fetch("https://do/config", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ config }),
-	});
+	const response = await withTimeout(
+		stub.fetch("https://do/config", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ config }),
+		}),
+		5_000,
+	);
 	if (!response.ok) {
 		throw new Error(`gateway_config_write_failed:${response.status}`);
 	}
@@ -138,7 +326,6 @@ export default {
 				: "other";
 		const config = await readGatewayConfig(env);
 		const effectiveEnv = applyGatewayConfig(env, config);
-		const hooks = getGatewayHooks(effectiveEnv);
 
 		if (route === "admin") {
 			if (request.method === "OPTIONS") {
@@ -156,37 +343,10 @@ export default {
 					),
 				);
 			}
-			const ctx = {
-				request: adminRequest,
-				env,
-				url,
-				path: url.pathname,
-				route: "admin" as const,
-			};
-			for (const hook of hooks) {
-				const outcome = hook.beforeRequest?.(ctx);
-				if (outcome && outcome.allow === false) {
-					return toWorkerResponse(
-						withCors(new Response("Forbidden", { status: 403 })),
-					);
-				}
-			}
 			try {
 				const response = await handleAdminRequest(request, effectiveEnv);
-				const durationMs = Date.now() - startMs;
-				for (const hook of hooks) {
-					hook.afterRequest?.({ ...ctx, response, durationMs });
-				}
 				return toWorkerResponse(response);
 			} catch (error) {
-				const durationMs = Date.now() - startMs;
-				for (const hook of hooks) {
-					hook.afterRequest?.({
-						...ctx,
-						durationMs,
-						error: String(error),
-					});
-				}
 				throw error;
 			}
 		}
@@ -213,20 +373,6 @@ export default {
 			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
 		const telegramRequest = request as unknown as Request;
-		const ctx = {
-			request: telegramRequest,
-			env,
-			url,
-			path: url.pathname,
-			route: "telegram" as const,
-			update,
-		};
-		for (const hook of hooks) {
-			const outcome = hook.beforeRequest?.(ctx);
-			if (outcome && outcome.allow === false) {
-				return toWorkerResponse(new Response("OK", { status: 200 }));
-			}
-		}
 		const id = env.UPDATES_DO.idFromName("telegram-updates");
 		const stub = env.UPDATES_DO.get(id);
 		try {
@@ -235,24 +381,8 @@ export default {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(update),
 			});
-			const durationMs = Date.now() - startMs;
-			for (const hook of hooks) {
-				hook.afterRequest?.({
-					...ctx,
-					durationMs,
-					response: new Response("OK", { status: 200 }),
-				});
-			}
 			return toWorkerResponse(new Response("OK", { status: 200 }));
 		} catch (error) {
-			const durationMs = Date.now() - startMs;
-			for (const hook of hooks) {
-				hook.afterRequest?.({
-					...ctx,
-					durationMs,
-					error: String(error),
-				});
-			}
 			throw error;
 		}
 	},
@@ -261,6 +391,15 @@ export default {
 		env: Env,
 		ctx: ExecutionContext,
 	): Promise<void> {
+		const cronTask = (async () => {
+			try {
+				await callCron(env, "/tick", {});
+			} catch (error) {
+				console.error("cron_tick_error", error);
+			}
+		})();
+		ctx.waitUntil(cronTask);
+
 		const config = await readGatewayConfig(env);
 		const effectiveEnv = applyGatewayConfig(env, config);
 		if (effectiveEnv.CRON_STATUS_ENABLED !== "1") return;
@@ -284,6 +423,8 @@ export default {
 		ctx.waitUntil(task);
 	},
 };
+
+export { SessionsDO, CronDO, ChannelsDO };
 
 export class GatewayConfigDO implements DurableObject {
 	private state: DurableObjectState;
@@ -421,7 +562,14 @@ export class TelegramUpdatesDO implements DurableObject {
 
 		try {
 			const runtime = await getBot(this.env);
+			const channel = await touchTelegramChannel(this.env, update);
+			if (!channel.enabled) return true;
+			if (channel.config) {
+				(update as Update & { __channelConfig?: unknown }).__channelConfig =
+					channel.config;
+			}
 			await runtime.bot.handleUpdate(update);
+			await touchTelegramSession(this.env, update);
 			if (updateId) {
 				state.processedIds.push(updateId);
 				if (state.processedIds.length > PROCESSED_IDS_MAX) {
@@ -456,7 +604,24 @@ export class TelegramUpdatesDO implements DurableObject {
 
 				state.queue.shift();
 				try {
+					const channel = await touchTelegramChannel(this.env, item.update);
+					if (!channel.enabled) {
+						state.processedIds.push(item.id);
+						if (state.processedIds.length > PROCESSED_IDS_MAX) {
+							state.processedIds = state.processedIds.slice(
+								-state.processedIds.length + PROCESSED_IDS_MAX,
+							);
+						}
+						await this.saveState(state);
+						logUpdateHandled("processed", item.update);
+						continue;
+					}
+					if (channel.config) {
+						(item.update as Update & { __channelConfig?: unknown }).__channelConfig =
+							channel.config;
+					}
 					await runtime.bot.handleUpdate(item.update);
+					await touchTelegramSession(this.env, item.update);
 					state.processedIds.push(item.id);
 					if (state.processedIds.length > PROCESSED_IDS_MAX) {
 						state.processedIds = state.processedIds.slice(
@@ -543,6 +708,10 @@ async function handleAdminRequest(request: WorkerRequest, env: Env) {
 			buildAdminStatusPayload({
 				env,
 				uptimeSeconds: getUptimeSeconds(),
+				sessions: {
+					gatewayConnections: activeGatewayConnections,
+					activeStreams: streamAbortControllers.size,
+				},
 			}),
 		);
 		return withCors(
@@ -596,6 +765,10 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 	let authenticated = false;
 
 	server.accept();
+	activeGatewayConnections += 1;
+	server.addEventListener("close", () => {
+		activeGatewayConnections = Math.max(0, activeGatewayConnections - 1);
+	});
 
 	const send = (frame: unknown) => {
 		server.send(JSON.stringify(frame));
@@ -650,11 +823,20 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 				return;
 			}
 			authenticated = true;
-			const config = await readGatewayConfig(env);
+			let config: GatewayConfig = {};
+			try {
+				config = await readGatewayConfig(env);
+			} catch (error) {
+				console.error("gateway_config_read_error", error);
+			}
 			const effectiveEnv = applyGatewayConfig(env, config);
 			const status = buildAdminStatusPayload({
 				env: effectiveEnv,
 				uptimeSeconds: getUptimeSeconds(),
+				sessions: {
+					gatewayConnections: activeGatewayConnections,
+					activeStreams: streamAbortControllers.size,
+				},
 			});
 			const snapshot = buildGatewayConfigSnapshot(env, config);
 			sendResponse(id, true, { status, config: snapshot });
@@ -681,7 +863,7 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			return;
 		}
 
-		if (method === "cron.run") {
+		if (method === "cron.report.run") {
 			try {
 				const config = await readGatewayConfig(env);
 				const effectiveEnv = applyGatewayConfig(env, config);
@@ -700,6 +882,300 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			} catch (error) {
 				sendResponse(id, false, { ok: false }, toGatewayError(String(error)));
 			}
+			return;
+		}
+
+		if (method === "sessions.list") {
+			try {
+				const response = await callSessions(env, "/list", params ?? {});
+				if (!response.ok) {
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("sessions_list_failed"),
+					);
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "sessions.patch") {
+			try {
+				const response = await callSessions(env, "/patch", params ?? {});
+				if (!response.ok) {
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("sessions_patch_failed"),
+					);
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "sessions.reset") {
+			try {
+				const response = await callSessions(env, "/reset", params ?? {});
+				if (!response.ok) {
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("sessions_reset_failed"),
+					);
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "sessions.delete") {
+			try {
+				const response = await callSessions(env, "/delete", params ?? {});
+				if (!response.ok) {
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("sessions_delete_failed"),
+					);
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "sessions.resolve") {
+			try {
+				const response = await callSessions(env, "/resolve", params ?? {});
+				if (!response.ok) {
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("sessions_resolve_failed"),
+					);
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "channels.list") {
+			try {
+				const response = await callChannels(env, "/list", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("channels_list_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "channels.patch") {
+			try {
+				const response = await callChannels(env, "/patch", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("channels_patch_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "wake") {
+			try {
+				const response = await callCron(env, "/wake", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("wake_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "cron.status") {
+			try {
+				const response = await callCron(env, "/status", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("cron_status_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "cron.list") {
+			try {
+				const response = await callCron(env, "/list", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("cron_list_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "cron.add") {
+			try {
+				const response = await callCron(env, "/add", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("cron_add_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "cron.update") {
+			try {
+				const response = await callCron(env, "/update", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("cron_update_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "cron.remove") {
+			try {
+				const response = await callCron(env, "/remove", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("cron_remove_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "cron.run") {
+			try {
+				const response = await callCron(env, "/run", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("cron_run_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "cron.runs") {
+			try {
+				const response = await callCron(env, "/runs", params ?? {});
+				if (!response.ok) {
+					sendResponse(id, false, undefined, toGatewayError("cron_runs_failed"));
+					return;
+				}
+				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "skills.status") {
+			const config = await readGatewayConfig(env);
+			const effectiveEnv = applyGatewayConfig(env, config);
+			const { report } = buildSkillsStatusReport({
+				runtimeSkills,
+				env: effectiveEnv,
+				config,
+			});
+			sendResponse(id, true, report);
+			return;
+		}
+
+		if (method === "skills.update") {
+			const skillKey =
+				typeof params?.skillKey === "string" ? params.skillKey.trim() : "";
+			if (!skillKey) {
+				sendResponse(id, false, undefined, toGatewayError("missing_skill_key"));
+				return;
+			}
+			const enabled =
+				typeof params?.enabled === "boolean" ? params.enabled : undefined;
+			const envPatch =
+				params?.env && typeof params.env === "object" ? params.env : undefined;
+
+			const config = await readGatewayConfig(env);
+			const skillsConfig = parseSkillsConfig(config);
+			const entries = { ...(skillsConfig.entries ?? {}) };
+			const current = { ...(entries[skillKey] ?? {}) };
+
+			if (typeof enabled === "boolean") {
+				current.enabled = enabled;
+			}
+			if (envPatch && typeof envPatch === "object") {
+				const nextEnv = { ...(current.env ?? {}) };
+				for (const [key, value] of Object.entries(envPatch)) {
+					const trimmedKey = key.trim();
+					if (!trimmedKey) continue;
+					const trimmedValue =
+						typeof value === "string" ? value.trim() : "";
+					if (!trimmedValue) delete nextEnv[trimmedKey];
+					else nextEnv[trimmedKey] = trimmedValue;
+				}
+				current.env = nextEnv;
+			}
+			entries[skillKey] = current;
+			const nextConfig = {
+				...config,
+				[SKILLS_CONFIG_KEY]: serializeSkillsConfig({ entries }),
+			};
+			await writeGatewayConfig(env, nextConfig);
+			sendResponse(id, true, { ok: true, skillKey, config: current });
+			return;
+		}
+
+		if (method === "skills.install") {
+			sendResponse(id, false, undefined, toGatewayError("install_not_supported"));
 			return;
 		}
 
@@ -738,6 +1214,7 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 						userName,
 						chatType,
 					});
+					await touchAdminSession({ env, chatId, chatType, userName });
 					sendResponse(id, true, { messages: result.messages });
 				} catch (error) {
 					sendResponse(id, false, undefined, toGatewayError(String(error)));
@@ -768,6 +1245,7 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 							sendEvent(streamId, { chunk: value as Record<string, unknown> });
 						}
 					}
+					await touchAdminSession({ env, chatId, chatType, userName });
 					sendEvent(streamId, { done: true });
 				} catch (error) {
 					sendEvent(streamId, {
