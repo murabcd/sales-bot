@@ -1,6 +1,7 @@
 import type {
 	DurableObject,
 	DurableObjectState,
+	DurableObjectNamespace,
 	Request as WorkerRequest,
 	Response as WorkerResponse,
 } from "@cloudflare/workers-types";
@@ -8,6 +9,11 @@ import { Cron } from "croner";
 import modelsConfig from "../apps/bot/config/models.json";
 import runtimeSkills from "../apps/bot/config/runtime-skills.json";
 import { createBot } from "../apps/bot/src/bot.js";
+import {
+	applyGatewayConfig,
+	type GatewayConfig,
+} from "../apps/bot/src/lib/gateway/config.js";
+import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
 import { markdownToTelegramHtmlChunks } from "../apps/bot/src/lib/telegram/format.js";
 
 export type CronSchedule =
@@ -20,6 +26,7 @@ export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload =
 	| { kind: "systemEvent"; text: string }
+	| { kind: "dailyStatus"; to?: string }
 	| {
 			kind: "agentTurn";
 			message: string;
@@ -99,6 +106,9 @@ export type CronRunLogEntry = {
 const STORE_KEY = "cron";
 const MAX_RUN_LOGS = 200;
 let botPromise: Promise<Awaited<ReturnType<typeof createBot>>> | null = null;
+type CronEnv = Record<string, string | undefined> & {
+	GATEWAY_CONFIG_DO: DurableObjectNamespace;
+};
 
 function now() {
 	return Date.now();
@@ -121,6 +131,20 @@ async function getBot(env: Record<string, string | undefined>) {
 		})();
 	}
 	return botPromise;
+}
+
+async function readGatewayConfig(env: CronEnv): Promise<GatewayConfig> {
+	const id = env.GATEWAY_CONFIG_DO.idFromName("gateway-config");
+	const stub = env.GATEWAY_CONFIG_DO.get(id);
+	try {
+		const response = await stub.fetch("https://do/config");
+		if (!response.ok) return {};
+		const payload = (await response.json()) as { config?: GatewayConfig };
+		return payload.config ?? {};
+	} catch (error) {
+		console.error("gateway_config_read_error", error);
+		return {};
+	}
 }
 
 async function sendTelegramMessage(
@@ -176,6 +200,9 @@ function normalizeSchedule(raw: CronSchedule): CronSchedule {
 function normalizePayload(raw: CronPayload): CronPayload {
 	if (raw.kind === "systemEvent") {
 		return { kind: "systemEvent", text: raw.text };
+	}
+	if (raw.kind === "dailyStatus") {
+		return { kind: "dailyStatus", to: raw.to };
 	}
 	return {
 		kind: "agentTurn",
@@ -286,11 +313,11 @@ function formatAgentSummary(messages: string[]) {
 
 export class CronDO implements DurableObject {
 	private state: DurableObjectState;
-	private env: Record<string, string | undefined>;
+	private env: CronEnv;
 
 	constructor(
 		state: DurableObjectState,
-		env: Record<string, string | undefined>,
+		env: CronEnv,
 	) {
 		this.state = state;
 		this.env = env;
@@ -391,7 +418,9 @@ export class CronDO implements DurableObject {
 		const state = await this.load();
 		const job = normalizeJob(raw);
 		if (
-			(job.sessionTarget === "main" && job.payload.kind !== "systemEvent") ||
+			(job.sessionTarget === "main" &&
+				job.payload.kind !== "systemEvent" &&
+				job.payload.kind !== "dailyStatus") ||
 			(job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn")
 		) {
 			return toWorkerResponse(new Response("invalid_job_payload", { status: 400 }));
@@ -452,7 +481,9 @@ export class CronDO implements DurableObject {
 		}
 		next.state = { ...(existing.state ?? {}), ...(patch.state ?? {}) };
 		if (
-			(next.sessionTarget === "main" && next.payload.kind !== "systemEvent") ||
+			(next.sessionTarget === "main" &&
+				next.payload.kind !== "systemEvent" &&
+				next.payload.kind !== "dailyStatus") ||
 			(next.sessionTarget === "isolated" && next.payload.kind !== "agentTurn")
 		) {
 			return toWorkerResponse(new Response("invalid_job_payload", { status: 400 }));
@@ -577,6 +608,31 @@ export class CronDO implements DurableObject {
 			try {
 				if (job.payload.kind === "systemEvent") {
 					summary = job.payload.text;
+				} else if (job.payload.kind === "dailyStatus") {
+					const config = await readGatewayConfig(this.env);
+					const effectiveEnv = applyGatewayConfig(this.env, config);
+					const chatId =
+						job.payload.to?.trim() ||
+						effectiveEnv.CRON_STATUS_CHAT_ID?.trim() ||
+						"";
+					if (!chatId) {
+						throw new Error("cron_daily_status_missing_chat_id");
+					}
+					const botToken = effectiveEnv.BOT_TOKEN;
+					if (!botToken) {
+						throw new Error("cron_daily_status_missing_bot_token");
+					}
+					const reportParts = await buildDailyStatusReportParts({
+						env: effectiveEnv,
+					});
+					for (const block of reportParts.blocks) {
+						await sendTelegramMessage(
+							botToken as string,
+							chatId,
+							block,
+						);
+					}
+					summary = reportParts.header;
 				} else {
 					const runtime = await getBot(this.env);
 					const result = await runtime.runLocalChat({

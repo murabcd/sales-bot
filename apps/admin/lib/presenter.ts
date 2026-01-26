@@ -32,5 +32,8 @@ export function formatCronSchedule(job: CronJob) {
 export function formatCronPayload(job: CronJob) {
 	const p = job.payload;
 	if (p.kind === "systemEvent") return `System: ${p.text}`;
+	if (p.kind === "dailyStatus") {
+		return `Daily status${p.to ? ` → ${p.to}` : ""}`;
+	}
 	return `Agent: ${p.message}`;
 }

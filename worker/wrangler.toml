@@ -10,9 +10,6 @@ invocation_logs = true
 [observability.traces]
 enabled = true
 
-[triggers]
-crons = ["0 8 * * 1-5"]
-
 [[durable_objects.bindings]]
 name = "UPDATES_DO"
 class_name = "TelegramUpdatesDO"

@@ -3,7 +3,6 @@ import type {
 	DurableObjectNamespace,
 	DurableObjectState,
 	ExecutionContext,
-	ScheduledEvent,
 	Request as WorkerRequest,
 	Response as WorkerResponse,
 } from "@cloudflare/workers-types";
@@ -385,42 +384,6 @@ export default {
 		} catch (error) {
 			throw error;
 		}
-	},
-	async scheduled(
-		_event: ScheduledEvent,
-		env: Env,
-		ctx: ExecutionContext,
-	): Promise<void> {
-		const cronTask = (async () => {
-			try {
-				await callCron(env, "/tick", {});
-			} catch (error) {
-				console.error("cron_tick_error", error);
-			}
-		})();
-		ctx.waitUntil(cronTask);
-
-		const config = await readGatewayConfig(env);
-		const effectiveEnv = applyGatewayConfig(env, config);
-		if (effectiveEnv.CRON_STATUS_ENABLED !== "1") return;
-		const chatId = effectiveEnv.CRON_STATUS_CHAT_ID?.trim();
-		if (!chatId) return;
-		if (!effectiveEnv.BOT_TOKEN) return;
-		const task = (async () => {
-			try {
-				const reportParts = await buildDailyStatusReportParts({
-					env: effectiveEnv,
-				});
-				await sendDailyStatusMessages(
-					effectiveEnv.BOT_TOKEN as string,
-					chatId,
-					reportParts,
-				);
-			} catch (error) {
-				console.error("cron_daily_status_error", error);
-			}
-		})();
-		ctx.waitUntil(task);
 	},
 };
 

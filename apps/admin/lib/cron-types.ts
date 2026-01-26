@@ -8,6 +8,7 @@ export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload =
 	| { kind: "systemEvent"; text: string }
+	| { kind: "dailyStatus"; to?: string }
 	| {
 			kind: "agentTurn";
 			message: string;

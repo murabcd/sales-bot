@@ -45,7 +45,7 @@ type CronFormState = {
 	cronTz: string;
 	sessionTarget: "main" | "isolated";
 	wakeMode: "next-heartbeat" | "now";
-	payloadKind: "systemEvent" | "agentTurn";
+	payloadKind: "systemEvent" | "agentTurn" | "dailyStatus";
 	payloadText: string;
 	payloadModel: string;
 	deliver: boolean;
@@ -114,6 +114,10 @@ function buildCronPayload(form: CronFormState) {
 		const text = form.payloadText.trim();
 		if (!text) throw new Error("System event text required.");
 		return { kind: "systemEvent" as const, text };
+	}
+	if (form.payloadKind === "dailyStatus") {
+		const to = form.to.trim();
+		return { kind: "dailyStatus" as const, to: to || undefined };
 	}
 	const message = form.payloadText.trim();
 	if (!message) throw new Error("Agent message required.");
@@ -190,8 +194,14 @@ export default function CronPage() {
 		try {
 			const schedule = buildCronSchedule(form);
 			const payload = buildCronPayload(form);
-			if (form.sessionTarget === "main" && payload.kind !== "systemEvent") {
-				throw new Error('Main jobs require payload kind "systemEvent".');
+			if (
+				form.sessionTarget === "main" &&
+				payload.kind !== "systemEvent" &&
+				payload.kind !== "dailyStatus"
+			) {
+				throw new Error(
+					'Main jobs require payload kind "systemEvent" or "dailyStatus".',
+				);
 			}
 			if (form.sessionTarget === "isolated" && payload.kind !== "agentTurn") {
 				throw new Error('Isolated jobs require payload kind "agentTurn".');
@@ -620,32 +630,60 @@ export default function CronPage() {
 									<SelectTrigger id="cron-payload">
 										<SelectValue />
 									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="systemEvent">System event</SelectItem>
-										<SelectItem value="agentTurn">Agent turn</SelectItem>
-									</SelectContent>
-								</Select>
-							</div>
+								<SelectContent>
+									<SelectItem value="systemEvent">System event</SelectItem>
+									<SelectItem value="agentTurn">Agent turn</SelectItem>
+									<SelectItem value="dailyStatus">Daily status</SelectItem>
+								</SelectContent>
+							</Select>
 						</div>
+					</div>
 
-						<div className="space-y-1 text-xs text-[#666666]">
-							<label htmlFor="cron-payload-text" className="block">
-								{form.payloadKind === "systemEvent"
-									? "System text"
-									: "Agent message"}
-							</label>
-							<Textarea
-								id="cron-payload-text"
-								rows={4}
-								value={form.payloadText}
-								onChange={(event) =>
-									setForm((prev) => ({
-										...prev,
-										payloadText: event.target.value,
-									}))
-								}
-							/>
-						</div>
+						{form.payloadKind !== "dailyStatus" ? (
+							<div className="space-y-1 text-xs text-[#666666]">
+								<label htmlFor="cron-payload-text" className="block">
+									{form.payloadKind === "systemEvent"
+										? "System text"
+										: "Agent message"}
+								</label>
+								<Textarea
+									id="cron-payload-text"
+									rows={4}
+									value={form.payloadText}
+									onChange={(event) =>
+										setForm((prev) => ({
+											...prev,
+											payloadText: event.target.value,
+										}))
+									}
+								/>
+							</div>
+						) : (
+							<div className="rounded-md border border-dashed border-[#e4e4e7] px-3 py-2 text-xs text-[#666666]">
+								Uses Settings → Cron & summary for Jira + OpenAI config.
+							</div>
+						)}
+
+						{form.payloadKind === "agentTurn" ||
+						form.payloadKind === "dailyStatus" ? (
+							<div className="space-y-1 text-xs text-[#666666]">
+								<label htmlFor="cron-to" className="block">
+									To
+								</label>
+								<Input
+									id="cron-to"
+									placeholder={
+										form.payloadKind === "dailyStatus"
+											? "Override chat id (optional)"
+											: "+1555… or chat id"
+									}
+									value={form.to}
+									onChange={(event) =>
+										setForm((prev) => ({ ...prev, to: event.target.value }))
+									}
+								/>
+							</div>
+						) : null}
 
 						{form.payloadKind === "agentTurn" ? (
 							<div className="grid gap-3 md:grid-cols-2">
@@ -705,22 +743,9 @@ export default function CronPage() {
 											<SelectItem value="signal">Signal</SelectItem>
 											<SelectItem value="imessage">iMessage</SelectItem>
 											<SelectItem value="msteams">MS Teams</SelectItem>
-										</SelectContent>
-									</Select>
-								</div>
-								<div className="space-y-1 text-xs text-[#666666]">
-									<label htmlFor="cron-to" className="block">
-										To
-									</label>
-									<Input
-										id="cron-to"
-										placeholder="+1555… or chat id"
-										value={form.to}
-										onChange={(event) =>
-											setForm((prev) => ({ ...prev, to: event.target.value }))
-										}
-									/>
-								</div>
+											</SelectContent>
+										</Select>
+									</div>
 								<div className="space-y-1 text-xs text-[#666666]">
 									<label htmlFor="cron-timeout" className="block">
 										Timeout (seconds)
