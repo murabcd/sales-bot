@@ -21,7 +21,9 @@ export function shouldRequireMentionForChannel(params: {
 	defaultRequireMention: boolean;
 }) {
 	const override = params.channelConfig?.requireMention;
-	return typeof override === "boolean" ? override : params.defaultRequireMention;
+	return typeof override === "boolean"
+		? override
+		: params.defaultRequireMention;
 }
 
 export function isUserAllowedForChannel(params: {

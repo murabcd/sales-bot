@@ -1,5 +1,5 @@
-import { POSTHOG_READONLY_TOOL_NAMES } from "./posthog-tools.js";
 import type { RuntimeSkill } from "../skills-core.js";
+import { POSTHOG_READONLY_TOOL_NAMES } from "./posthog-tools.js";
 
 export function buildBuiltinRuntimeSkills(): RuntimeSkill[] {
 	const skills: RuntimeSkill[] = [

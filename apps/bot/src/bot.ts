@@ -43,6 +43,13 @@ import {
 	buildTrackerTools,
 	buildWebTools,
 } from "./lib/agents/subagents/index.js";
+import {
+	type ChannelConfig,
+	filterSkillsForChannel,
+	isUserAllowedForChannel,
+	parseChannelConfig,
+	shouldRequireMentionForChannel,
+} from "./lib/channels.js";
 import { type CandidateIssue, getChatState } from "./lib/context/chat-state.js";
 import {
 	appendHistoryMessage,
@@ -58,13 +65,6 @@ import {
 	normalizeJiraIssue,
 } from "./lib/jira.js";
 import { createLogger } from "./lib/logger.js";
-import {
-	filterSkillsForChannel,
-	isUserAllowedForChannel,
-	parseChannelConfig,
-	shouldRequireMentionForChannel,
-	type ChannelConfig,
-} from "./lib/channels.js";
 import {
 	filterPosthogTools,
 	POSTHOG_READONLY_TOOL_NAMES,

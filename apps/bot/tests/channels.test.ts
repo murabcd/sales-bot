@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { RuntimeSkill } from "../src/skills-core.js";
 import {
 	filterSkillsForChannel,
 	isUserAllowedForChannel,
 	parseChannelConfig,
 	shouldRequireMentionForChannel,
 } from "../src/lib/channels.js";
+import type { RuntimeSkill } from "../src/skills-core.js";
 
 const skills: RuntimeSkill[] = [
 	{ name: "alpha", tool: "alpha.tool" },

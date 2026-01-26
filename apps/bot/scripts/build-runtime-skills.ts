@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeToolName } from "../src/lib/tools/registry.js";
 import { buildBuiltinRuntimeSkills } from "../src/lib/runtime-skills-catalog.js";
+import { normalizeToolName } from "../src/lib/tools/registry.js";
 import { loadSkills } from "../src/skills.js";
-import { resolveToolRef, type RuntimeSkill } from "../src/skills-core.js";
+import { type RuntimeSkill, resolveToolRef } from "../src/skills-core.js";
 
 const outputPath = path.resolve("config/runtime-skills.json");
 const fileSkills = await loadSkills("skills");
