@@ -184,7 +184,11 @@
 		"description": "Search issues using Yandex Tracker Query Language.",
 		"tool": "yandex-tracker.issues_find",
 		"args": {
-			"fields": ["key", "summary", "created_at"],
+			"fields": [
+				"key",
+				"summary",
+				"created_at"
+			],
 			"per_page": 100
 		}
 	},
@@ -293,7 +297,10 @@
 		"description": "List all available Yandex Tracker queues.",
 		"tool": "yandex-tracker.queues_get_all",
 		"args": {
-			"fields": ["key", "name"],
+			"fields": [
+				"key",
+				"name"
+			],
 			"per_page": 100
 		}
 	},
