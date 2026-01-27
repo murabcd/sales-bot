@@ -2,34 +2,28 @@ import { openai } from "@ai-sdk/openai";
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
-import { supermemoryTools } from "@supermemory/tools/ai-sdk";
 import {
 	convertToModelMessages,
-	createAgentUIStream,
-	createUIMessageStream,
-	type ModelMessage,
-	stepCountIs,
-	ToolLoopAgent,
+	type ToolLoopAgent,
 	type ToolSet,
-	type TypedToolCall,
-	type TypedToolResult,
-	tool,
 	experimental_transcribe as transcribe,
-	type UIMessage,
 	type UIMessageChunk,
 } from "ai";
 import { API_CONSTANTS, Bot, InlineKeyboard } from "grammy";
-import { z } from "zod";
+import {
+	type AgentToolCall,
+	type AgentToolResult,
+	buildUserUIMessage,
+	createAgentFactory,
+	createAgentStreamWithTools,
+	createAgentToolsFactory,
+} from "./lib/agent/create.js";
+import { createOrchestrationHelpers } from "./lib/agent/orchestration.js";
 import {
 	createIssueAgent,
 	createMultiIssueAgent,
 } from "./lib/agents/issue-agent.js";
-import {
-	type OrchestrationAgentId,
-	type OrchestrationPlan,
-	routeRequest,
-	runOrchestration,
-} from "./lib/agents/orchestrator.js";
+import { runOrchestration } from "./lib/agents/orchestrator.js";
 import {
 	buildJiraTools,
 	buildMemoryTools as buildMemorySubagentTools,
@@ -39,12 +33,6 @@ import {
 } from "./lib/agents/subagents/index.js";
 import { createAccessHelpers, isGroupChat } from "./lib/bot/access.js";
 import { registerCommands } from "./lib/bot/commands.js";
-import {
-	buildCronExpr,
-	findCronJob,
-	formatCronJob,
-	parseTime,
-} from "./lib/bot/cron.js";
 import {
 	createLogHelpers,
 	createRequestLoggerMiddleware,
@@ -57,7 +45,14 @@ import {
 	parseChannelConfig,
 	shouldRequireMentionForChannel,
 } from "./lib/channels.js";
-import { type CandidateIssue, getChatState } from "./lib/context/chat-state.js";
+import { createJiraClient } from "./lib/clients/jira.js";
+import {
+	createTrackerClient,
+	extractCommentsText,
+	type TrackerToolResult,
+} from "./lib/clients/tracker.js";
+import { type BotEnv, loadBotEnv } from "./lib/config/env.js";
+import { getChatState } from "./lib/context/chat-state.js";
 import {
 	appendHistoryMessage,
 	clearHistoryMessages,
@@ -67,39 +62,22 @@ import {
 } from "./lib/context/session-history.js";
 import { type FilePart, isPdfDocument, toFilePart } from "./lib/files.js";
 import { type ImageFilePart, toImageFilePart } from "./lib/images.js";
-import {
-	buildJiraJql,
-	extractJiraText,
-	type JiraIssue,
-	normalizeJiraIssue,
-} from "./lib/jira.js";
+import { normalizeJiraIssue } from "./lib/jira.js";
 import { createLogger } from "./lib/logger.js";
 import {
 	filterPosthogTools,
 	POSTHOG_READONLY_TOOL_NAMES,
 } from "./lib/posthog-tools.js";
-import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
-import {
-	expandTermVariants,
-	extractIssueKeysFromText,
-	extractKeywords,
-	normalizeForMatch,
-} from "./lib/text/normalize.js";
+import { extractIssueKeysFromText } from "./lib/text/normalize.js";
 import { createToolStatusHandler } from "./lib/tool-status.js";
-import {
-	isToolAllowedForSender,
-	parseSenderToolAccess,
-} from "./lib/tools/access.js";
+import { parseSenderToolAccess } from "./lib/tools/access.js";
 import {
 	createApprovalStore,
 	listApprovals,
 	parseApprovalList,
 } from "./lib/tools/approvals.js";
-import { wrapToolMapWithHooks } from "./lib/tools/hooks.js";
 import {
-	filterToolMapByPolicy,
 	filterToolMetasByPolicy,
-	isToolAllowed,
 	mergeToolPolicies,
 	parseToolPolicyVariants,
 } from "./lib/tools/policy.js";
@@ -113,8 +91,6 @@ import {
 	type ToolConflict,
 	type ToolMeta,
 } from "./lib/tools/registry.js";
-import { sanitizeToolCallIdsForTranscript } from "./lib/tools/tool-call-id.js";
-import { repairToolUseResultPairing } from "./lib/tools/transcript-repair.js";
 import {
 	type ModelsFile,
 	normalizeModelRef,
@@ -122,7 +98,7 @@ import {
 } from "./models-core.js";
 import { type RuntimeSkill, resolveToolRef } from "./skills-core.js";
 
-export type BotEnv = Record<string, string | undefined>;
+export type { BotEnv } from "./lib/config/env.js";
 
 export type CreateBotOptions = {
 	env: BotEnv;
@@ -145,123 +121,69 @@ export type CreateBotOptions = {
 
 export async function createBot(options: CreateBotOptions) {
 	const env = options.env;
-	const BOT_TOKEN = env.BOT_TOKEN;
-	const TRACKER_TOKEN = env.TRACKER_TOKEN;
-	const TRACKER_CLOUD_ORG_ID = env.TRACKER_CLOUD_ORG_ID;
-	const TRACKER_ORG_ID = env.TRACKER_ORG_ID ?? "";
-	const JIRA_BASE_URL = env.JIRA_BASE_URL ?? "";
-	const JIRA_EMAIL = env.JIRA_EMAIL ?? "";
-	const JIRA_API_TOKEN = env.JIRA_API_TOKEN ?? "";
-	const JIRA_PROJECT_KEY = env.JIRA_PROJECT_KEY ?? "FL";
-	const JIRA_BOARD_ID = Number.parseInt(env.JIRA_BOARD_ID ?? "", 10);
-	const POSTHOG_PERSONAL_API_KEY = env.POSTHOG_PERSONAL_API_KEY ?? "";
-	const POSTHOG_API_BASE_URL =
-		env.POSTHOG_API_BASE_URL ?? "https://eu.posthog.com";
-	const OPENAI_API_KEY = env.OPENAI_API_KEY;
-	const OPENAI_MODEL = env.OPENAI_MODEL ?? "";
-	const SOUL_PROMPT = env.SOUL_PROMPT ?? "";
-	const ALLOWED_TG_IDS = env.ALLOWED_TG_IDS ?? "";
-	const CRON_STATUS_TIMEZONE = env.CRON_STATUS_TIMEZONE ?? "UTC";
-	const DEFAULT_TRACKER_QUEUE = env.DEFAULT_TRACKER_QUEUE ?? "PROJ";
-	const DEFAULT_ISSUE_PREFIX =
-		env.DEFAULT_ISSUE_PREFIX ?? DEFAULT_TRACKER_QUEUE;
-	const DEBUG_LOGS = env.DEBUG_LOGS === "1";
-	const TRACKER_API_BASE_URL =
-		env.TRACKER_API_BASE_URL ?? "https://api.tracker.yandex.net";
-	const SUPERMEMORY_API_KEY = env.SUPERMEMORY_API_KEY ?? "";
-	const SUPERMEMORY_PROJECT_ID = env.SUPERMEMORY_PROJECT_ID ?? "";
-	const SUPERMEMORY_TAG_PREFIX = env.SUPERMEMORY_TAG_PREFIX ?? "telegram:user:";
-	const HISTORY_MAX_MESSAGES = Number.parseInt(
-		env.HISTORY_MAX_MESSAGES ?? "20",
-		10,
-	);
-	const COMMENTS_CACHE_TTL_MS = Number.parseInt(
-		env.COMMENTS_CACHE_TTL_MS ?? "300000",
-		10,
-	);
-	const COMMENTS_CACHE_MAX = Number.parseInt(
-		env.COMMENTS_CACHE_MAX ?? "500",
-		10,
-	);
-	const COMMENTS_FETCH_CONCURRENCY = Number.parseInt(
-		env.COMMENTS_FETCH_CONCURRENCY ?? "4",
-		10,
-	);
-	const COMMENTS_FETCH_BUDGET_MS = Number.parseInt(
-		env.COMMENTS_FETCH_BUDGET_MS ?? "2500",
-		10,
-	);
-
-	const commentsCache = new Map<
-		string,
-		{ at: number; value: { text: string; truncated: boolean } }
-	>();
-	const jiraCommentsCache = new Map<
-		string,
-		{ at: number; value: { text: string; truncated: boolean } }
-	>();
-
-	const TELEGRAM_TIMEOUT_SECONDS = Number.parseInt(
-		env.TELEGRAM_TIMEOUT_SECONDS ?? "60",
-		10,
-	);
-	const TELEGRAM_TEXT_CHUNK_LIMIT = Number.parseInt(
-		env.TELEGRAM_TEXT_CHUNK_LIMIT ?? "4000",
-		10,
-	);
-	const ALLOWED_TG_GROUPS = env.ALLOWED_TG_GROUPS ?? "";
-	const TELEGRAM_GROUP_REQUIRE_MENTION =
-		env.TELEGRAM_GROUP_REQUIRE_MENTION !== "0";
-	const IMAGE_MAX_BYTES = Number.parseInt(env.IMAGE_MAX_BYTES ?? "5000000", 10);
-	const DOCUMENT_MAX_BYTES = Number.parseInt(
-		env.DOCUMENT_MAX_BYTES ?? "10000000",
-		10,
-	);
-	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
-	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
-	const TOOL_RATE_LIMITS = env.TOOL_RATE_LIMITS ?? "";
-	const TOOL_APPROVAL_REQUIRED = env.TOOL_APPROVAL_REQUIRED ?? "";
-	const TOOL_APPROVAL_TTL_MS = Number.parseInt(
-		env.TOOL_APPROVAL_TTL_MS ?? "600000",
-		10,
-	);
-	const TOOL_APPROVAL_STORE_PATH =
-		env.TOOL_APPROVAL_STORE_PATH ?? "data/approvals/approvals.json";
-	const TOOL_ALLOWLIST_USER_IDS = env.TOOL_ALLOWLIST_USER_IDS ?? "";
-	const TOOL_DENYLIST_USER_IDS = env.TOOL_DENYLIST_USER_IDS ?? "";
-	const TOOL_ALLOWLIST_USER_TOOLS = env.TOOL_ALLOWLIST_USER_TOOLS ?? "";
-	const TOOL_DENYLIST_USER_TOOLS = env.TOOL_DENYLIST_USER_TOOLS ?? "";
-	const TOOL_ALLOWLIST_CHAT_TOOLS = env.TOOL_ALLOWLIST_CHAT_TOOLS ?? "";
-	const TOOL_DENYLIST_CHAT_TOOLS = env.TOOL_DENYLIST_CHAT_TOOLS ?? "";
-	const ORCHESTRATION_ALLOW_AGENTS = env.ORCHESTRATION_ALLOW_AGENTS ?? "";
-	const ORCHESTRATION_DENY_AGENTS = env.ORCHESTRATION_DENY_AGENTS ?? "";
-	const ORCHESTRATION_SUBAGENT_MAX_STEPS = Number.parseInt(
-		env.ORCHESTRATION_SUBAGENT_MAX_STEPS ?? "3",
-		10,
-	);
-	const ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS = Number.parseInt(
-		env.ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS ?? "4",
-		10,
-	);
-	const ORCHESTRATION_SUBAGENT_TIMEOUT_MS = Number.parseInt(
-		env.ORCHESTRATION_SUBAGENT_TIMEOUT_MS ?? "20000",
-		10,
-	);
-	const ORCHESTRATION_PARALLELISM = Number.parseInt(
-		env.ORCHESTRATION_PARALLELISM ?? "2",
-		10,
-	);
-	const AGENT_DEFAULT_MAX_STEPS = Number.parseInt(
-		env.AGENT_DEFAULT_MAX_STEPS ?? "6",
-		10,
-	);
-	const AGENT_DEFAULT_TIMEOUT_MS = Number.parseInt(
-		env.AGENT_DEFAULT_TIMEOUT_MS ?? "20000",
-		10,
-	);
-	const AGENT_CONFIG_OVERRIDES = env.AGENT_CONFIG_OVERRIDES ?? "";
-	const SERVICE_NAME = env.SERVICE_NAME ?? "omni";
-	const RELEASE_VERSION = env.RELEASE_VERSION ?? env.APP_VERSION ?? undefined;
+	const envConfig = loadBotEnv(env);
+	const {
+		BOT_TOKEN,
+		TRACKER_TOKEN,
+		TRACKER_CLOUD_ORG_ID,
+		TRACKER_ORG_ID,
+		JIRA_BASE_URL,
+		JIRA_EMAIL,
+		JIRA_API_TOKEN,
+		JIRA_PROJECT_KEY,
+		JIRA_BOARD_ID,
+		POSTHOG_PERSONAL_API_KEY,
+		POSTHOG_API_BASE_URL,
+		OPENAI_API_KEY,
+		OPENAI_MODEL,
+		SOUL_PROMPT,
+		ALLOWED_TG_IDS,
+		CRON_STATUS_TIMEZONE,
+		DEFAULT_TRACKER_QUEUE,
+		DEFAULT_ISSUE_PREFIX,
+		DEBUG_LOGS,
+		TRACKER_API_BASE_URL,
+		SUPERMEMORY_API_KEY,
+		SUPERMEMORY_PROJECT_ID,
+		SUPERMEMORY_TAG_PREFIX,
+		HISTORY_MAX_MESSAGES,
+		COMMENTS_CACHE_TTL_MS,
+		COMMENTS_CACHE_MAX,
+		COMMENTS_FETCH_CONCURRENCY,
+		COMMENTS_FETCH_BUDGET_MS,
+		TELEGRAM_TIMEOUT_SECONDS,
+		TELEGRAM_TEXT_CHUNK_LIMIT,
+		ALLOWED_TG_GROUPS,
+		TELEGRAM_GROUP_REQUIRE_MENTION,
+		IMAGE_MAX_BYTES,
+		DOCUMENT_MAX_BYTES,
+		WEB_SEARCH_ENABLED,
+		WEB_SEARCH_CONTEXT_SIZE,
+		TOOL_RATE_LIMITS,
+		TOOL_APPROVAL_REQUIRED,
+		TOOL_APPROVAL_TTL_MS,
+		TOOL_APPROVAL_STORE_PATH,
+		TOOL_ALLOWLIST_USER_IDS,
+		TOOL_DENYLIST_USER_IDS,
+		TOOL_ALLOWLIST_USER_TOOLS,
+		TOOL_DENYLIST_USER_TOOLS,
+		TOOL_ALLOWLIST_CHAT_TOOLS,
+		TOOL_DENYLIST_CHAT_TOOLS,
+		ORCHESTRATION_ALLOW_AGENTS,
+		ORCHESTRATION_DENY_AGENTS,
+		ORCHESTRATION_SUBAGENT_MAX_STEPS,
+		ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS,
+		ORCHESTRATION_SUBAGENT_TIMEOUT_MS,
+		ORCHESTRATION_PARALLELISM,
+		AGENT_DEFAULT_MAX_STEPS,
+		AGENT_DEFAULT_TIMEOUT_MS,
+		AGENT_CONFIG_OVERRIDES,
+		SERVICE_NAME,
+		RELEASE_VERSION,
+		COMMIT_HASH,
+		REGION,
+		INSTANCE_ID,
+	} = envConfig;
 	const toolPolicies = parseToolPolicyVariants(env);
 	const toolPolicy = toolPolicies.base;
 	const toolPolicyDm = toolPolicies.dm;
@@ -292,9 +214,6 @@ export async function createBot(options: CreateBotOptions) {
 			})
 		: null;
 	let posthogToolsPromise: Promise<ToolSet> | null = null;
-	const COMMIT_HASH = env.COMMIT_HASH ?? env.GIT_COMMIT ?? undefined;
-	const REGION = env.REGION ?? undefined;
-	const INSTANCE_ID = env.INSTANCE_ID ?? undefined;
 	const logger = createLogger({
 		service: SERVICE_NAME,
 		version: RELEASE_VERSION,
@@ -358,6 +277,7 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	const runtimeSkills = options.runtimeSkills ?? [];
+	const cronClient = options.cronClient;
 
 	const toolConflictLogger = (event: {
 		event: "tool_conflict";
@@ -592,7 +512,6 @@ export async function createBot(options: CreateBotOptions) {
 	const ALL_TOOL_LIST = toolInventory.allTools;
 	const TOOL_CONFLICTS = toolInventory.conflicts;
 	const TOOL_SUPPRESSED_BY_POLICY = toolInventory.suppressedByPolicy;
-	let lastTrackerCallAt: number | null = null;
 
 	const { getLogContext, setLogContext, setLogError, getUpdateType, logDebug } =
 		createLogHelpers({
@@ -604,6 +523,34 @@ export async function createBot(options: CreateBotOptions) {
 		textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
 		logDebug,
 	});
+
+	const trackerClient = createTrackerClient({
+		token: TRACKER_TOKEN ?? "",
+		cloudOrgId: TRACKER_CLOUD_ORG_ID,
+		orgId: TRACKER_ORG_ID,
+		apiBaseUrl: TRACKER_API_BASE_URL,
+		commentsCacheTtlMs: COMMENTS_CACHE_TTL_MS,
+		commentsCacheMax: COMMENTS_CACHE_MAX,
+		commentsFetchConcurrency: COMMENTS_FETCH_CONCURRENCY,
+		logger,
+		getLogContext,
+		setLogContext,
+		logDebug,
+	});
+	const { trackerCallTool, trackerHealthCheck, getLastTrackerCallAt } =
+		trackerClient;
+
+	const jiraClient = createJiraClient({
+		baseUrl: JIRA_BASE_URL,
+		email: JIRA_EMAIL,
+		apiToken: JIRA_API_TOKEN,
+		commentsCacheTtlMs: COMMENTS_CACHE_TTL_MS,
+		commentsCacheMax: COMMENTS_CACHE_MAX,
+		commentsFetchConcurrency: COMMENTS_FETCH_CONCURRENCY,
+		logDebug,
+	});
+	const { jiraIssueGet, jiraIssueGetComments } = jiraClient;
+	const jiraEnabled = Boolean(JIRA_BASE_URL && JIRA_EMAIL && JIRA_API_TOKEN);
 
 	bot.api.config.use(apiThrottler());
 	bot.use(
@@ -684,174 +631,25 @@ export async function createBot(options: CreateBotOptions) {
 		}
 		return merged;
 	}
-
-	function parseOrchestrationAgentList(raw: string): OrchestrationAgentId[] {
-		if (!raw.trim()) return [];
-		const allowed = new Set<OrchestrationAgentId>([
-			"tracker",
-			"jira",
-			"posthog",
-			"web",
-			"memory",
-		]);
-		return raw
-			.split(",")
-			.map((value) => value.trim().toLowerCase())
-			.filter((value): value is OrchestrationAgentId =>
-				allowed.has(value as OrchestrationAgentId),
-			);
-	}
-
-	function buildOrchestrationBudgets() {
-		const maxSteps = Number.isFinite(ORCHESTRATION_SUBAGENT_MAX_STEPS)
-			? ORCHESTRATION_SUBAGENT_MAX_STEPS
-			: undefined;
-		const maxToolCalls = Number.isFinite(ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS)
-			? ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS
-			: undefined;
-		const timeoutMs = Number.isFinite(ORCHESTRATION_SUBAGENT_TIMEOUT_MS)
-			? ORCHESTRATION_SUBAGENT_TIMEOUT_MS
-			: undefined;
-		return {
-			tracker: { maxSteps, maxToolCalls, timeoutMs },
-			jira: { maxSteps, maxToolCalls, timeoutMs },
-			posthog: { maxSteps, maxToolCalls, timeoutMs },
-			web: { maxSteps, maxToolCalls, timeoutMs },
-			memory: { maxSteps, maxToolCalls, timeoutMs },
-		};
-	}
-
-	function parseAgentOverrides(raw: string) {
-		if (!raw.trim()) return {};
-		try {
-			const parsed = JSON.parse(raw) as Record<
-				string,
-				{
-					modelId?: string;
-					maxSteps?: number;
-					timeoutMs?: number;
-					instructions?: string;
-				}
-			>;
-			return parsed ?? {};
-		} catch {
-			return {};
-		}
-	}
-
-	function buildOrchestrationSummary(result: {
-		summaries: Array<{ agentId: string; text: string; toolUsage: string[] }>;
-	}) {
-		if (result.summaries.length === 0) return "";
-		return [
-			"Orchestration summary (internal; do not quote to user):",
-			...result.summaries.map((summary) => {
-				const toolLine = summary.toolUsage.length
-					? `Tools: ${summary.toolUsage.join(", ")}`
-					: "Tools: none";
-				return [
-					`[${summary.agentId}]`,
-					summary.text || "(no summary)",
-					toolLine,
-				].join("\n");
-			}),
-			"",
-		].join("\n\n");
-	}
-
-	function mergeHistoryBlocks(primary?: string, extra?: string) {
-		if (primary && extra) return `${primary}\n\n${extra}`;
-		return primary ?? extra ?? "";
-	}
-
-	function resolveOrchestrationPolicy(ctx: BotContext) {
-		const allowAgents = parseOrchestrationAgentList(ORCHESTRATION_ALLOW_AGENTS);
-		const denyAgents = new Set(
-			parseOrchestrationAgentList(ORCHESTRATION_DENY_AGENTS),
-		);
-		if (isGroupChat(ctx)) {
-			denyAgents.add("web");
-			denyAgents.add("memory");
-		}
-		const blockedTools = new Set<string>();
-		if (isGroupChat(ctx)) {
-			blockedTools.add("web_search");
-			blockedTools.add("searchMemories");
-			blockedTools.add("addMemory");
-		}
-		return {
-			allowAgents: allowAgents.length > 0 ? allowAgents : undefined,
-			denyAgents: Array.from(denyAgents),
-			budgets: buildOrchestrationBudgets(),
-			parallelism:
-				Number.isFinite(ORCHESTRATION_PARALLELISM) &&
-				ORCHESTRATION_PARALLELISM > 0
-					? ORCHESTRATION_PARALLELISM
-					: 1,
-			agentOverrides: parseAgentOverrides(AGENT_CONFIG_OVERRIDES),
-			defaultMaxSteps:
-				Number.isFinite(AGENT_DEFAULT_MAX_STEPS) && AGENT_DEFAULT_MAX_STEPS > 0
-					? AGENT_DEFAULT_MAX_STEPS
-					: 6,
-			defaultTimeoutMs:
-				Number.isFinite(AGENT_DEFAULT_TIMEOUT_MS) &&
-				AGENT_DEFAULT_TIMEOUT_MS > 0
-					? AGENT_DEFAULT_TIMEOUT_MS
-					: 20_000,
-			hooks: {
-				beforeToolCall: ({
-					agentId,
-					toolName,
-					input,
-				}: {
-					agentId: OrchestrationAgentId;
-					toolName: string;
-					input: unknown;
-				}) => {
-					if (blockedTools.has(toolName)) {
-						logger.info({
-							event: "orchestration_tool_blocked",
-							agent: agentId,
-							tool: toolName,
-						});
-						return { allow: false, reason: "tool disabled in group chat" };
-					}
-					logger.info({
-						event: "orchestration_tool_call",
-						agent: agentId,
-						tool: toolName,
-						input,
-					});
-				},
-				afterToolCall: ({
-					agentId,
-					toolName,
-					durationMs,
-					error,
-				}: {
-					agentId: OrchestrationAgentId;
-					toolName: string;
-					durationMs: number;
-					error?: string;
-				}) => {
-					logger.info({
-						event: "orchestration_tool_result",
-						agent: agentId,
-						tool: toolName,
-						durationMs,
-						error,
-					});
-				},
-			},
-		};
-	}
-
-	function buildOrchestrationPlan(
-		prompt: string,
-		ctx: BotContext,
-	): Promise<OrchestrationPlan> {
-		return routeRequest(prompt, activeModelConfig.id, isGroupChat(ctx));
-	}
+	const {
+		buildOrchestrationPlan,
+		buildOrchestrationSummary,
+		mergeHistoryBlocks,
+		resolveOrchestrationPolicy,
+	} = createOrchestrationHelpers({
+		allowAgentsRaw: ORCHESTRATION_ALLOW_AGENTS,
+		denyAgentsRaw: ORCHESTRATION_DENY_AGENTS,
+		subagentMaxSteps: ORCHESTRATION_SUBAGENT_MAX_STEPS,
+		subagentMaxToolCalls: ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS,
+		subagentTimeoutMs: ORCHESTRATION_SUBAGENT_TIMEOUT_MS,
+		parallelism: ORCHESTRATION_PARALLELISM,
+		agentConfigOverrides: AGENT_CONFIG_OVERRIDES,
+		agentDefaultMaxSteps: AGENT_DEFAULT_MAX_STEPS,
+		agentDefaultTimeoutMs: AGENT_DEFAULT_TIMEOUT_MS,
+		logger,
+		isGroupChat,
+		getActiveModelId: () => activeModelConfig.id,
+	});
 
 	function getModelConfig(ref: string) {
 		return modelsConfig.models[ref];
@@ -874,923 +672,45 @@ export async function createBot(options: CreateBotOptions) {
 	async function getCommandTools() {
 		return ALL_TOOL_LIST;
 	}
+	const createAgentTools = createAgentToolsFactory({
+		toolConflictLogger,
+		toolPolicy,
+		resolveChatToolPolicy,
+		toolRateLimiter,
+		approvalRequired,
+		approvalStore,
+		senderToolAccess,
+		logger,
+		logDebug,
+		debugLogs: DEBUG_LOGS,
+		webSearchEnabled: WEB_SEARCH_ENABLED,
+		webSearchContextSize: WEB_SEARCH_CONTEXT_SIZE,
+		defaultTrackerQueue: DEFAULT_TRACKER_QUEUE,
+		cronStatusTimezone: CRON_STATUS_TIMEZONE,
+		jiraProjectKey: JIRA_PROJECT_KEY,
+		jiraBoardId: JIRA_BOARD_ID,
+		jiraEnabled,
+		posthogPersonalApiKey: POSTHOG_PERSONAL_API_KEY,
+		getPosthogTools,
+		cronClient,
+		trackerClient,
+		jiraClient,
+		logJiraAudit,
+		supermemoryApiKey: SUPERMEMORY_API_KEY,
+		supermemoryProjectId: SUPERMEMORY_PROJECT_ID,
+		supermemoryTagPrefix: SUPERMEMORY_TAG_PREFIX,
+		commentsFetchBudgetMs: COMMENTS_FETCH_BUDGET_MS,
+	});
 
-	async function createAgentTools(options?: {
-		onCandidates?: (candidates: CandidateIssue[]) => void;
-		recentCandidates?: CandidateIssue[];
-		history?: string;
-		chatId?: string;
-		ctx?: BotContext;
-		webSearchEnabled?: boolean;
-	}): Promise<ToolSet> {
-		const registry = createToolRegistry({ logger: toolConflictLogger });
-		const toolMap: ToolSet = {};
-		const registerTool = (meta: ToolMeta, toolDef: ToolSet[string]) => {
-			const res = registry.register(meta);
-			if (!res.ok) return;
-			toolMap[meta.name] = toolDef;
-		};
-
-		const memoryTools = buildMemoryTools(options?.chatId);
-		for (const [name, toolDef] of Object.entries(memoryTools)) {
-			registerTool(
-				{
-					name,
-					description: "Supermemory tool",
-					source: "memory",
-					origin: "supermemory",
-				},
-				toolDef as ToolSet[string],
-			);
-		}
-
-		const webSearchContextSize = resolveWebSearchContextSize(
-			WEB_SEARCH_CONTEXT_SIZE.trim().toLowerCase(),
-		);
-		const allowWebSearch =
-			typeof options?.webSearchEnabled === "boolean"
-				? options.webSearchEnabled
-				: WEB_SEARCH_ENABLED;
-		if (allowWebSearch) {
-			registerTool(
-				{
-					name: "web_search",
-					description:
-						"Search the web for up-to-date information (OpenAI web_search).",
-					source: "web",
-					origin: "openai",
-				},
-				openai.tools.webSearch({
-					searchContextSize: webSearchContextSize,
-				}) as unknown as ToolSet[string],
-			);
-		}
-
-		registerTool(
-			{
-				name: "tracker_search",
-				description: `Search Yandex Tracker issues in queue ${DEFAULT_TRACKER_QUEUE} using keywords from the question.`,
-				source: "tracker",
-				origin: "core",
-			},
-			tool({
-				description: `Search Yandex Tracker issues in queue ${DEFAULT_TRACKER_QUEUE} using keywords from the question.`,
-				inputSchema: z.object({
-					question: z.string().describe("User question or keywords"),
-					queue: z
-						.string()
-						.optional()
-						.describe(`Queue key, defaults to ${DEFAULT_TRACKER_QUEUE}`),
-				}),
-				execute: async ({ question, queue }) => {
-					const startedAt = Date.now();
-					const commentStats = { fetched: 0, cacheHits: 0 };
-					const queueKey = queue ?? DEFAULT_TRACKER_QUEUE;
-					const query = buildIssuesQuery(question, queueKey);
-					const payload = {
-						query,
-						fields: [
-							"key",
-							"summary",
-							"description",
-							"created_at",
-							"updated_at",
-							"status",
-							"tags",
-							"priority",
-							"estimation",
-							"spent",
-						],
-						per_page: 100,
-						include_description: true,
-					};
-					logDebug("tracker_search", payload);
-					try {
-						const result = await trackerCallTool(
-							"issues_find",
-							payload,
-							30_000,
-							options?.ctx,
-						);
-						const normalized = normalizeIssuesResult(result);
-						const keywords = extractKeywords(question, 12).map((item) =>
-							item.toLowerCase(),
-						);
-						const haveKeywords = keywords.length > 0;
-
-						const issues = normalized.issues;
-						const ranked = rankIssues(issues, question);
-						const top = ranked.slice(0, 20);
-						const commentsByIssue: Record<
-							string,
-							{ text: string; truncated: boolean }
-						> = {};
-						const commentDeadline = startedAt + COMMENTS_FETCH_BUDGET_MS;
-						await fetchCommentsWithBudget(
-							top.map((entry) => entry.key ?? ""),
-							commentsByIssue,
-							commentDeadline,
-							commentStats,
-							options?.ctx,
-						);
-
-						let selected = top;
-						if (haveKeywords) {
-							const matches = top.filter((entry) => {
-								const summary = getIssueField(entry.issue, [
-									"summary",
-									"title",
-								]);
-								const description = getIssueField(entry.issue, ["description"]);
-								const comments = entry.key
-									? (commentsByIssue[entry.key]?.text ?? "")
-									: "";
-								const haystack = `${summary} ${description} ${comments}`;
-								return matchesKeywords(haystack, keywords);
-							});
-							if (matches.length) {
-								selected = matches;
-								logDebug("tracker_search filtered", {
-									total: top.length,
-									matches: matches.length,
-								});
-							}
-						}
-
-						const topCandidates = selected.slice(0, 5).map((entry) => ({
-							key: entry.key,
-							summary: getIssueField(entry.issue, ["summary", "title"]),
-							score: entry.score,
-						}));
-						const topScore = selected[0]?.score ?? 0;
-						const secondScore = selected[1]?.score ?? 0;
-						const ambiguous =
-							selected.length > 1 &&
-							(topScore <= 3 || topScore - secondScore < 3);
-
-						if (options?.onCandidates) {
-							options.onCandidates(topCandidates);
-						}
-
-						logDebug("tracker_search result", {
-							count: issues.length,
-							top: selected.map((item) => item.key).filter((key) => key),
-							commentsFetched: commentStats.fetched,
-							commentsCacheHits: commentStats.cacheHits,
-							durationMs: Date.now() - startedAt,
-							ambiguous,
-						});
-						return {
-							issues: selected.map((item) => item.issue),
-							scores: selected.map((item) => ({
-								key: item.key,
-								score: item.score,
-							})),
-							comments: commentsByIssue,
-							ambiguous,
-							candidates: topCandidates,
-						};
-					} catch (error) {
-						logDebug("tracker_search error", { error: String(error) });
-						return { error: String(error) };
-					}
-				},
-			}),
-		);
-
-		if (cronClient) {
-			registerTool(
-				{
-					name: "cron_schedule",
-					description:
-						"Schedule a recurring report or reminder and deliver it to the current chat.",
-					source: "cron",
-					origin: "core",
-				},
-				tool({
-					description:
-						"Create a recurring cron job that runs a prompt and sends the result to Telegram.",
-					inputSchema: z.object({
-						goal: z.string().describe("What should the report/reminder do?"),
-						prompt: z
-							.string()
-							.optional()
-							.describe("Optional custom prompt for the agent."),
-						schedule: z.object({
-							cadence: z
-								.enum(["daily", "weekdays", "weekly", "every"])
-								.optional(),
-							time: z.string().optional().describe("Time in HH:MM (24h)."),
-							timezone: z.string().optional().describe("IANA timezone."),
-							dayOfWeek: z
-								.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
-								.optional()
-								.describe("Required for weekly cadence."),
-							everyMinutes: z
-								.number()
-								.int()
-								.positive()
-								.optional()
-								.describe("Required for every cadence."),
-						}),
-						deliverToChatId: z
-							.string()
-							.optional()
-							.describe("Telegram chat id to deliver to."),
-					}),
-					execute: async (input) => {
-						const chatId =
-							input.deliverToChatId ?? options?.ctx?.chat?.id?.toString() ?? "";
-						if (!chatId) {
-							return {
-								ok: false,
-								message: "Missing chat id. Ask the user where to deliver.",
-							};
-						}
-						const cadence = input.schedule.cadence ?? "daily";
-						const timezone =
-							input.schedule.timezone?.trim() || CRON_STATUS_TIMEZONE;
-						let schedule: Record<string, unknown> | null = null;
-						if (cadence === "every") {
-							const everyMinutes = input.schedule.everyMinutes;
-							if (!everyMinutes) {
-								return {
-									ok: false,
-									message:
-										"Need interval minutes for every cadence (e.g. every 60 minutes).",
-								};
-							}
-							schedule = {
-								kind: "every",
-								everyMs: Math.max(1, everyMinutes) * 60_000,
-							};
-						} else {
-							const time = input.schedule.time
-								? parseTime(input.schedule.time)
-								: null;
-							if (!time) {
-								return {
-									ok: false,
-									message: "Need time in HH:MM (e.g. 11:00).",
-								};
-							}
-							let expr = "";
-							if (cadence === "weekdays") {
-								expr = buildCronExpr(time, true);
-							} else if (cadence === "weekly") {
-								const day = input.schedule.dayOfWeek;
-								if (!day) {
-									return {
-										ok: false,
-										message: "Need dayOfWeek for weekly cadence (mon/tue/...).",
-									};
-								}
-								const dayMap: Record<string, string> = {
-									mon: "1",
-									tue: "2",
-									wed: "3",
-									thu: "4",
-									fri: "5",
-									sat: "6",
-									sun: "0",
-								};
-								expr = `${time.minute} ${time.hour} * * ${dayMap[day] ?? "*"}`;
-							} else {
-								expr = buildCronExpr(time, false);
-							}
-							schedule = { kind: "cron", expr, tz: timezone };
-						}
-
-						const goal = input.goal.trim();
-						const prompt =
-							input.prompt?.trim() ||
-							`Prepare a concise report: ${goal}. Include key numbers and a short insight.`;
-						const job = {
-							name: goal.slice(0, 80),
-							description: goal,
-							enabled: true,
-							schedule,
-							sessionTarget: "main",
-							wakeMode: "next-heartbeat",
-							payload: {
-								kind: "agentTurn",
-								message: prompt,
-								deliver: true,
-								channel: "telegram",
-								to: chatId,
-							},
-						};
-						const created = await cronClient.add(job);
-						return {
-							ok: true,
-							message: `Scheduled: ${formatCronJob(created)}`,
-							job: created,
-						};
-					},
-				}),
-			);
-
-			registerTool(
-				{
-					name: "cron_list",
-					description: "List scheduled cron jobs.",
-					source: "cron",
-					origin: "core",
-				},
-				tool({
-					description: "List scheduled cron jobs.",
-					inputSchema: z.object({
-						includeDisabled: z.boolean().optional(),
-					}),
-					execute: async ({ includeDisabled }) => {
-						const payload = await cronClient.list({
-							includeDisabled: includeDisabled !== false,
-						});
-						const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-						return {
-							ok: true,
-							jobs,
-							message:
-								jobs.length === 0
-									? "No cron jobs."
-									: jobs.map((job) => formatCronJob(job)),
-						};
-					},
-				}),
-			);
-
-			registerTool(
-				{
-					name: "cron_remove",
-					description: "Remove a scheduled cron job by id or name.",
-					source: "cron",
-					origin: "core",
-				},
-				tool({
-					description: "Remove a scheduled cron job by id or name.",
-					inputSchema: z.object({
-						target: z.string().describe("Job id or name."),
-					}),
-					execute: async ({ target }) => {
-						const payload = await cronClient.list({ includeDisabled: true });
-						const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-						const matches = findCronJob(jobs, target);
-						if (matches.length === 0) {
-							return { ok: false, message: `No job found for ${target}.` };
-						}
-						if (matches.length > 1) {
-							return {
-								ok: false,
-								message: "Multiple matches found. Please specify a job id.",
-							};
-						}
-						const jobId = (matches[0] as { id?: string }).id ?? target;
-						await cronClient.remove({ jobId });
-						return { ok: true, message: `Removed ${jobId}.` };
-					},
-				}),
-			);
-		}
-
-		if (JIRA_BASE_URL && JIRA_EMAIL && JIRA_API_TOKEN) {
-			registerTool(
-				{
-					name: "jira_search",
-					description: `Search Jira issues in project ${JIRA_PROJECT_KEY} using keywords from the question.`,
-					source: "tracker",
-					origin: "jira",
-				},
-				tool({
-					description: `Search Jira issues in project ${JIRA_PROJECT_KEY} using keywords from the question.`,
-					inputSchema: z.object({
-						question: z.string().describe("User question or keywords"),
-						project: z
-							.string()
-							.optional()
-							.describe(`Project key, defaults to ${JIRA_PROJECT_KEY}`),
-					}),
-					execute: async ({ question, project }) => {
-						const startedAt = Date.now();
-						const commentStats = { fetched: 0, cacheHits: 0 };
-						const projectKey = project ?? JIRA_PROJECT_KEY;
-						const jql = buildJiraJql(question, projectKey);
-						logDebug("jira_search", { jql, project: projectKey });
-						try {
-							const issues = await jiraIssuesFind({
-								jql,
-								maxResults: 50,
-								fields: ["summary", "description"],
-								timeoutMs: 30_000,
-							});
-							const normalized = issues.map((issue) =>
-								normalizeJiraIssue(issue),
-							);
-							const top = normalized.slice(0, 20);
-							const commentsByIssue: Record<
-								string,
-								{ text: string; truncated: boolean }
-							> = {};
-							const commentDeadline = startedAt + COMMENTS_FETCH_BUDGET_MS;
-							await fetchJiraCommentsWithBudget(
-								top.map((entry) => entry.key),
-								commentsByIssue,
-								commentDeadline,
-								commentStats,
-							);
-							return {
-								issues: top.map((entry) => ({
-									...entry,
-									comments: commentsByIssue[entry.key]?.text ?? "",
-									commentsTruncated:
-										commentsByIssue[entry.key]?.truncated ?? false,
-								})),
-								jql,
-								comments: commentsByIssue,
-							};
-						} catch (error) {
-							logDebug("jira_search error", { error: String(error) });
-							return { error: String(error) };
-						}
-					},
-				}),
-			);
-
-			registerTool(
-				{
-					name: "jira_sprint_issues",
-					description: "List Jira issues for a sprint by name or id.",
-					source: "tracker",
-					origin: "jira",
-				},
-				tool({
-					description: "List Jira issues for a sprint by name or id.",
-					inputSchema: z.object({
-						sprintName: z.string().optional().describe("Sprint name"),
-						sprintId: z.number().optional().describe("Sprint id"),
-						boardId: z.number().optional().describe("Jira board id"),
-						maxResults: z.number().optional().describe("Max issues"),
-					}),
-					execute: async ({ sprintName, sprintId, boardId, maxResults }) => {
-						const startedAt = Date.now();
-						const normalizedBoardId =
-							typeof boardId === "number" && boardId > 0 ? boardId : undefined;
-						const normalizedSprintId =
-							typeof sprintId === "number" && sprintId > 0
-								? sprintId
-								: undefined;
-						const resolvedBoardId =
-							normalizedBoardId ??
-							(Number.isFinite(JIRA_BOARD_ID) && JIRA_BOARD_ID > 0
-								? JIRA_BOARD_ID
-								: undefined);
-						try {
-							if (!normalizedSprintId && !sprintName) {
-								throw new Error("missing_sprint");
-							}
-							if (!resolvedBoardId && !normalizedSprintId) {
-								throw new Error("missing_board_id");
-							}
-							let resolvedSprintId = normalizedSprintId;
-							let resolvedSprintName = sprintName;
-							if (!resolvedSprintId && sprintName) {
-								const sprint = await jiraSprintFindByName(
-									resolvedBoardId as number,
-									sprintName,
-								);
-								if (sprint) {
-									resolvedSprintId = sprint.id;
-									resolvedSprintName = sprint.name;
-								}
-							}
-							let issues: Array<{
-								key: string;
-								summary: string;
-								status: string;
-								assignee: string;
-								dueDate: string;
-								priority: string;
-							}> = [];
-							if (resolvedSprintId) {
-								issues = await jiraSprintIssues(
-									resolvedSprintId as number,
-									maxResults,
-								);
-							} else if (sprintName) {
-								const safeName = sprintName.replaceAll('"', "");
-								const jql = `project = ${JIRA_PROJECT_KEY} AND sprint = "${safeName}" ORDER BY created DESC`;
-								const fallback = await jiraIssuesFind({
-									jql,
-									maxResults: maxResults ?? 200,
-									fields: [
-										"summary",
-										"status",
-										"assignee",
-										"duedate",
-										"priority",
-									],
-									timeoutMs: 30_000,
-								});
-								issues = fallback.map((issue) => ({
-									key: issue.key ?? "",
-									summary:
-										typeof issue.fields?.summary === "string"
-											? issue.fields.summary
-											: "",
-									status: issue.fields?.status?.name ?? "",
-									assignee: issue.fields?.assignee?.displayName ?? "",
-									dueDate: issue.fields?.duedate ?? "",
-									priority: issue.fields?.priority?.name ?? "",
-								}));
-							} else {
-								throw new Error("sprint_not_found");
-							}
-							logJiraAudit(
-								options?.ctx,
-								"jira_sprint_issues",
-								{
-									boardId: resolvedBoardId,
-									sprintId: resolvedSprintId,
-									sprintName: resolvedSprintName,
-								},
-								"success",
-								undefined,
-								Date.now() - startedAt,
-							);
-							return {
-								boardId: resolvedBoardId,
-								sprintId: resolvedSprintId,
-								sprintName: resolvedSprintName,
-								issues,
-							};
-						} catch (error) {
-							logJiraAudit(
-								options?.ctx,
-								"jira_sprint_issues",
-								{ boardId: resolvedBoardId, sprintId, sprintName },
-								"error",
-								String(error),
-								Date.now() - startedAt,
-							);
-							throw error;
-						}
-					},
-				}),
-			);
-
-			registerTool(
-				{
-					name: "jira_issues_find",
-					description: "Search Jira issues using JQL.",
-					source: "command",
-					origin: "jira",
-				},
-				tool({
-					description: "Search Jira issues using JQL.",
-					inputSchema: z.object({
-						jql: z.string().describe("JQL query"),
-						maxResults: z.number().optional().describe("Max results"),
-					}),
-					execute: async ({ jql, maxResults }) => {
-						const startedAt = Date.now();
-						try {
-							const issues = await jiraIssuesFind({
-								jql,
-								maxResults,
-								fields: ["summary", "description"],
-								timeoutMs: 30_000,
-							});
-							logJiraAudit(
-								options?.ctx,
-								"jira_issues_find",
-								{ jql },
-								"success",
-								undefined,
-								Date.now() - startedAt,
-							);
-							return issues.map((issue) => normalizeJiraIssue(issue));
-						} catch (error) {
-							logJiraAudit(
-								options?.ctx,
-								"jira_issues_find",
-								{ jql },
-								"error",
-								String(error),
-								Date.now() - startedAt,
-							);
-							throw error;
-						}
-					},
-				}),
-			);
-
-			registerTool(
-				{
-					name: "jira_issue_get",
-					description: "Get Jira issue by key (e.g., FL-123).",
-					source: "command",
-					origin: "jira",
-				},
-				tool({
-					description: "Get Jira issue by key.",
-					inputSchema: z.object({
-						issueKey: z.string().describe("Issue key"),
-					}),
-					execute: async ({ issueKey }) => {
-						const startedAt = Date.now();
-						try {
-							const issue = await jiraIssueGet(issueKey, 30_000);
-							logJiraAudit(
-								options?.ctx,
-								"jira_issue_get",
-								{ issueKey },
-								"success",
-								undefined,
-								Date.now() - startedAt,
-							);
-							return normalizeJiraIssue(issue);
-						} catch (error) {
-							logJiraAudit(
-								options?.ctx,
-								"jira_issue_get",
-								{ issueKey },
-								"error",
-								String(error),
-								Date.now() - startedAt,
-							);
-							throw error;
-						}
-					},
-				}),
-			);
-
-			registerTool(
-				{
-					name: "jira_issue_get_comments",
-					description: "Get comments for a Jira issue by key.",
-					source: "command",
-					origin: "jira",
-				},
-				tool({
-					description: "Get comments for a Jira issue by key.",
-					inputSchema: z.object({
-						issueKey: z.string().describe("Issue key"),
-					}),
-					execute: async ({ issueKey }) => {
-						const startedAt = Date.now();
-						try {
-							const comments = await jiraIssueGetComments({ issueKey }, 30_000);
-							logJiraAudit(
-								options?.ctx,
-								"jira_issue_get_comments",
-								{ issueKey },
-								"success",
-								undefined,
-								Date.now() - startedAt,
-							);
-							return comments;
-						} catch (error) {
-							logJiraAudit(
-								options?.ctx,
-								"jira_issue_get_comments",
-								{ issueKey },
-								"error",
-								String(error),
-								Date.now() - startedAt,
-							);
-							throw error;
-						}
-					},
-				}),
-			);
-		}
-
-		if (POSTHOG_PERSONAL_API_KEY) {
-			const posthogTools = await getPosthogTools();
-			for (const [name, toolDef] of Object.entries(posthogTools)) {
-				registerTool(
-					{
-						name,
-						description: "PostHog read-only tool",
-						source: "posthog",
-						origin: "posthog",
-					},
-					toolDef,
-				);
-			}
-		}
-
-		const filtered = filterToolMapByPolicy(toolMap, toolPolicy);
-		const chatPolicy = resolveChatToolPolicy(options?.ctx);
-		const filteredByChat = filterToolMapByPolicy(filtered.tools, chatPolicy);
-		const suppressed = [...filtered.suppressed, ...filteredByChat.suppressed];
-		if (DEBUG_LOGS && suppressed.length > 0) {
-			logDebug("tools suppressed by policy", {
-				suppressed,
-			});
-		}
-		const chatId = options?.ctx?.chat?.id?.toString();
-		const userId = options?.ctx?.from?.id?.toString();
-		const wrapped = wrapToolMapWithHooks(filteredByChat.tools as ToolSet, {
-			beforeToolCall: ({ toolName, toolCallId, input }) => {
-				if (chatPolicy && !isToolAllowed(toolName, chatPolicy)) {
-					logger.info({
-						event: "tool_blocked",
-						tool: toolName,
-						tool_call_id: toolCallId,
-						chat_id: chatId,
-						user_id: userId,
-						reason: "policy",
-					});
-					return { allow: false, reason: "policy" };
-				}
-				const senderCheck = isToolAllowedForSender(
-					toolName,
-					{ userId, chatId },
-					senderToolAccess,
-				);
-				if (!senderCheck.allowed) {
-					logger.info({
-						event: "tool_blocked",
-						tool: toolName,
-						tool_call_id: toolCallId,
-						chat_id: chatId,
-						user_id: userId,
-						reason: senderCheck.reason ?? "sender_policy",
-					});
-					return { allow: false, reason: "sender_policy" };
-				}
-				const normalized = normalizeToolName(toolName);
-				if (
-					approvalRequired.size > 0 &&
-					approvalRequired.has(normalized) &&
-					!approvalStore.isApproved(chatId ?? "", normalized)
-				) {
-					logger.info({
-						event: "tool_approval_required",
-						tool: toolName,
-						tool_call_id: toolCallId,
-						chat_id: chatId,
-						user_id: userId,
-					});
-					return { allow: false, reason: "approval_required" };
-				}
-				const rate = toolRateLimiter.check(toolName, chatId, userId);
-				if (!rate.allowed) {
-					logger.info({
-						event: "tool_rate_limited",
-						tool: toolName,
-						tool_call_id: toolCallId,
-						chat_id: chatId,
-						user_id: userId,
-						reset_ms: rate.resetMs,
-					});
-					return { allow: false, reason: "rate_limited" };
-				}
-				logger.info({
-					event: "tool_call",
-					tool: toolName,
-					tool_call_id: toolCallId,
-					chat_id: chatId,
-					user_id: userId,
-					input,
-				});
-			},
-			afterToolCall: ({ toolName, toolCallId, durationMs, error }) => {
-				logger.info({
-					event: "tool_result",
-					tool: toolName,
-					tool_call_id: toolCallId,
-					chat_id: chatId,
-					user_id: userId,
-					duration_ms: durationMs,
-					error,
-				});
-			},
-		});
-		return wrapped;
-	}
-
-	type AgentToolSet = Awaited<ReturnType<typeof createAgentTools>>;
-	type AgentToolCall = TypedToolCall<AgentToolSet>;
-	type AgentToolResult = TypedToolResult<AgentToolSet>;
-
-	function buildMemoryTools(chatId?: string) {
-		if (!SUPERMEMORY_API_KEY || !chatId) return {};
-		const containerTags = [`${SUPERMEMORY_TAG_PREFIX}${chatId}`];
-		const options = SUPERMEMORY_PROJECT_ID
-			? { projectId: SUPERMEMORY_PROJECT_ID, containerTags }
-			: { containerTags };
-		return supermemoryTools(SUPERMEMORY_API_KEY, options);
-	}
-
-	function resolveWebSearchContextSize(
-		value: string,
-	): "low" | "medium" | "high" {
-		if (value === "medium" || value === "high") return value;
-		return "low";
-	}
-
-	async function createAgent(
-		question: string,
-		modelRef: string,
-		modelConfig: typeof activeModelConfig,
-		options?: {
-			onCandidates?: (candidates: CandidateIssue[]) => void;
-			recentCandidates?: CandidateIssue[];
-			history?: string;
-			chatId?: string;
-			userName?: string;
-			onToolStep?: (toolNames: string[]) => Promise<void> | void;
-			ctx?: BotContext;
-			webSearchEnabled?: boolean;
-		},
-	) {
-		const tools = await getAgentTools();
-		const allowWebSearch =
-			typeof options?.webSearchEnabled === "boolean"
-				? options.webSearchEnabled
-				: WEB_SEARCH_ENABLED;
-		const webSearchMeta = {
-			name: "web_search",
-			description:
-				"Search the web for up-to-date information (OpenAI web_search).",
-			source: "web",
-			origin: "openai",
-		} satisfies ToolMeta;
-		const filteredTools = allowWebSearch
-			? tools.some((tool) => tool.name === "web_search")
-				? tools
-				: [...tools, webSearchMeta]
-			: tools.filter((tool) => tool.name !== "web_search");
-		const toolLines = filteredTools
-			.map((toolItem) => {
-				const desc = toolItem.description ? ` - ${toolItem.description}` : "";
-				return `${toolItem.name}${desc}`;
-			})
-			.join("\n");
-		const instructions = buildAgentInstructions({
-			question,
-			modelRef,
-			modelName: modelConfig.label ?? modelConfig.id,
-			reasoning: resolveReasoningFor(modelConfig),
-			toolLines,
-			recentCandidates: options?.recentCandidates,
-			history: options?.history,
-			userName: options?.userName,
-			globalSoul: SOUL_PROMPT,
-			channelSoul: options?.ctx?.state.channelConfig?.systemPrompt,
-		});
-		const agentTools = await createAgentTools(options);
-		return new ToolLoopAgent({
-			model: openai(modelConfig.id),
-			instructions,
-			tools: agentTools,
-			stopWhen: stepCountIs(6),
-			prepareCall: (params) => {
-				const messages = params.messages;
-				if (!Array.isArray(messages)) return params;
-				const sanitized = sanitizeToolCallIdsForTranscript(
-					messages as unknown as Array<Record<string, unknown>>,
-				);
-				const repaired = repairToolUseResultPairing(sanitized);
-				if (
-					DEBUG_LOGS &&
-					(repaired.added.length > 0 ||
-						repaired.droppedDuplicateCount > 0 ||
-						repaired.droppedOrphanCount > 0 ||
-						repaired.moved)
-				) {
-					logDebug("transcript repair", {
-						added: repaired.added.length,
-						droppedDuplicate: repaired.droppedDuplicateCount,
-						droppedOrphan: repaired.droppedOrphanCount,
-						moved: repaired.moved,
-					});
-				}
-				return {
-					...params,
-					messages: repaired.messages as unknown as ModelMessage[],
-				};
-			},
-			onStepFinish: ({ toolCalls }) => {
-				if (!options?.onToolStep) return;
-				const names = (toolCalls ?? [])
-					.map((call) => call?.toolName)
-					.filter((name): name is string => Boolean(name));
-				if (names.length > 0) {
-					options.onToolStep(names);
-				}
-			},
-		});
-	}
-
-	function matchesKeywords(text: string, keywords: string[]): boolean {
-		const normalizedText = normalizeForMatch(text);
-		return (
-			keywords.length === 0 ||
-			keywords.some((word) => normalizedText.includes(normalizeForMatch(word)))
-		);
-	}
+	const createAgent = createAgentFactory({
+		getAgentTools,
+		createAgentTools,
+		resolveReasoningFor,
+		logDebug,
+		debugLogs: DEBUG_LOGS,
+		webSearchEnabled: WEB_SEARCH_ENABLED,
+		soulPrompt: SOUL_PROMPT,
+	});
 
 	function isSprintQuery(text: string) {
 		const lower = text.toLowerCase();
@@ -1813,265 +733,6 @@ export async function createBot(options: CreateBotOptions) {
 		return key.startsWith(`${JIRA_PROJECT_KEY}-`);
 	}
 
-	function normalizeSprintName(value: string) {
-		return value
-			.trim()
-			.replaceAll("–", "-")
-			.replaceAll("—", "-")
-			.replaceAll(/\s+/g, " ")
-			.toLowerCase();
-	}
-
-	function getCachedComments(
-		issueId: string,
-	): { text: string; truncated: boolean } | null {
-		const cached = commentsCache.get(issueId);
-		if (!cached) return null;
-		if (Date.now() - cached.at > COMMENTS_CACHE_TTL_MS) {
-			commentsCache.delete(issueId);
-			return null;
-		}
-		return cached.value;
-	}
-
-	function setCachedComments(
-		issueId: string,
-		value: { text: string; truncated: boolean },
-	) {
-		commentsCache.set(issueId, { at: Date.now(), value });
-		if (commentsCache.size <= COMMENTS_CACHE_MAX) return;
-		let oldestKey: string | null = null;
-		let oldestAt = Number.POSITIVE_INFINITY;
-		for (const [key, entry] of commentsCache.entries()) {
-			if (entry.at < oldestAt) {
-				oldestAt = entry.at;
-				oldestKey = key;
-			}
-		}
-		if (oldestKey) commentsCache.delete(oldestKey);
-	}
-
-	async function fetchCommentsWithBudget(
-		keys: string[],
-		commentsByIssue: Record<string, { text: string; truncated: boolean }>,
-		deadlineMs: number,
-		stats: { fetched: number; cacheHits: number },
-		ctx?: BotContext,
-	) {
-		if (!keys.length) return;
-		let cursor = 0;
-		const concurrency = Math.max(1, COMMENTS_FETCH_CONCURRENCY);
-
-		const worker = async () => {
-			while (true) {
-				if (Date.now() > deadlineMs) return;
-				const index = cursor;
-				cursor += 1;
-				if (index >= keys.length) return;
-				const key = keys[index];
-				if (!key || commentsByIssue[key]) continue;
-				const cached = getCachedComments(key);
-				if (cached) {
-					stats.cacheHits += 1;
-					commentsByIssue[key] = cached;
-					continue;
-				}
-				try {
-					const commentResult = await trackerCallTool(
-						"issue_get_comments",
-						{ issue_id: key },
-						30_000,
-						ctx,
-					);
-					stats.fetched += 1;
-					const extracted = extractCommentsText(commentResult);
-					commentsByIssue[key] = extracted;
-					setCachedComments(key, extracted);
-				} catch (error) {
-					logDebug("issue_get_comments error", {
-						key,
-						error: String(error),
-					});
-				}
-			}
-		};
-
-		await Promise.all(Array.from({ length: concurrency }, () => worker()));
-	}
-
-	async function fetchJiraCommentsWithBudget(
-		keys: string[],
-		commentsByIssue: Record<string, { text: string; truncated: boolean }>,
-		deadlineMs: number,
-		stats: { fetched: number; cacheHits: number },
-	) {
-		if (!keys.length) return;
-		let cursor = 0;
-		const concurrency = Math.max(1, COMMENTS_FETCH_CONCURRENCY);
-
-		const worker = async () => {
-			while (true) {
-				if (Date.now() > deadlineMs) return;
-				const index = cursor;
-				cursor += 1;
-				if (index >= keys.length) return;
-				const key = keys[index];
-				if (!key || commentsByIssue[key]) continue;
-				const cached = getJiraCachedComments(key);
-				if (cached) {
-					stats.cacheHits += 1;
-					commentsByIssue[key] = cached;
-					continue;
-				}
-				try {
-					const commentResult = await jiraIssueGetComments(
-						{ issueKey: key },
-						30_000,
-					);
-					stats.fetched += 1;
-					commentsByIssue[key] = commentResult;
-					setJiraCachedComments(key, commentResult);
-				} catch (error) {
-					logDebug("jira_issue_get_comments error", {
-						key,
-						error: String(error),
-					});
-				}
-			}
-		};
-
-		await Promise.all(Array.from({ length: concurrency }, () => worker()));
-	}
-
-	function normalizeIssuesResult(result: TrackerToolResult): {
-		issues: Array<Record<string, unknown>>;
-	} {
-		const direct = result as {
-			result?: Array<Record<string, unknown>>;
-			issues?: Array<Record<string, unknown>>;
-		};
-		if (Array.isArray(direct.result)) return { issues: direct.result };
-		if (Array.isArray(direct.issues)) return { issues: direct.issues };
-		if (Array.isArray(result)) {
-			return { issues: result as Array<Record<string, unknown>> };
-		}
-		return { issues: [] };
-	}
-
-	type RankedIssue = {
-		issue: Record<string, unknown>;
-		score: number;
-		key: string | null;
-		index: number;
-	};
-
-	function getIssueField(
-		issue: Record<string, unknown>,
-		keys: string[],
-	): string {
-		for (const key of keys) {
-			const value = issue[key];
-			if (typeof value === "string" && value.trim()) {
-				return value;
-			}
-		}
-		return "";
-	}
-
-	function scoreIssue(
-		issue: Record<string, unknown>,
-		terms: string[],
-	): number | null {
-		if (!terms.length) return 0;
-		const summary = normalizeForMatch(
-			getIssueField(issue, ["summary", "title"]),
-		);
-		const description = normalizeForMatch(
-			getIssueField(issue, ["description"]),
-		);
-		const tags = Array.isArray(issue.tags)
-			? normalizeForMatch(issue.tags.map((tag) => String(tag)).join(" "))
-			: "";
-		const key = normalizeForMatch(getIssueField(issue, ["key"]));
-
-		let score = 0;
-		for (const term of terms) {
-			const normalized = normalizeForMatch(term);
-			if (!normalized) continue;
-			if (summary.includes(normalized)) score += 5;
-			if (description.includes(normalized)) score += 2;
-			if (tags.includes(normalized)) score += 1;
-			if (key.includes(normalized)) score += 10;
-		}
-		return score;
-	}
-
-	function rankIssues(
-		issues: Array<Record<string, unknown>>,
-		question: string,
-	): RankedIssue[] {
-		const terms = extractKeywords(question, 10);
-		const ranked = issues
-			.map((issue, index) => {
-				const score = scoreIssue(issue, terms);
-				if (score === null) return null;
-				const key = getIssueField(issue, ["key"]);
-				return {
-					issue,
-					score,
-					key: key || null,
-					index,
-				} as RankedIssue;
-			})
-			.filter((item): item is RankedIssue => Boolean(item))
-			.sort((a, b) => {
-				if (b.score !== a.score) return b.score - a.score;
-				return a.index - b.index;
-			});
-		return ranked;
-	}
-
-	function extractCommentsText(result: TrackerToolResult): {
-		text: string;
-		truncated: boolean;
-	} {
-		let comments: string[] = [];
-		const direct = result as Array<Record<string, unknown>> | null;
-		if (Array.isArray(direct)) {
-			comments = direct
-				.map((item) => {
-					const text =
-						(item.text as string | undefined) ??
-						(item.comment as string | undefined) ??
-						(item.body as string | undefined);
-					return typeof text === "string" ? text : "";
-				})
-				.filter((value) => value.length > 0);
-		}
-
-		const combined = comments.join("\n");
-		const limit = 8000;
-		if (combined.length > limit) {
-			return { text: `${combined.slice(0, limit)}…`, truncated: true };
-		}
-		return { text: combined, truncated: false };
-	}
-
-	function buildIssuesQuery(question: string, queue: string): string {
-		const terms = extractKeywords(question);
-		if (!terms.length) {
-			const safe = question.replaceAll('"', "");
-			return `Queue:${queue} AND (Summary: "${safe}" OR Description: "${safe}")`;
-		}
-		const expanded = terms.flatMap((term) => expandTermVariants(term));
-		const unique = Array.from(new Set(expanded));
-		const orTerms = unique.flatMap((term) => {
-			const safe = term.replaceAll('"', "");
-			return [`Summary: "${safe}"`, `Description: "${safe}"`];
-		});
-		return `Queue:${queue} AND (${orTerms.join(" OR ")})`;
-	}
-
 	function setActiveModel(refOverride: string) {
 		const selected = selectModel(modelsConfig, refOverride);
 		activeModelRef = selected.ref;
@@ -2084,383 +745,6 @@ export async function createBot(options: CreateBotOptions) {
 		if (!value) return null;
 		if (["off", "low", "standard", "high"].includes(value)) return value;
 		return null;
-	}
-
-	function trackerHeaders(): Record<string, string> {
-		const headers: Record<string, string> = {
-			Authorization: `OAuth ${TRACKER_TOKEN}`,
-		};
-		if (TRACKER_CLOUD_ORG_ID) {
-			headers["X-Cloud-Org-Id"] = TRACKER_CLOUD_ORG_ID;
-		} else if (TRACKER_ORG_ID) {
-			headers["X-Org-Id"] = TRACKER_ORG_ID;
-		}
-		return headers;
-	}
-
-	function jiraHeaders(): Record<string, string> {
-		const token = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString(
-			"base64",
-		);
-		return {
-			Authorization: `Basic ${token}`,
-			Accept: "application/json",
-		};
-	}
-
-	function buildJiraUrl(pathname: string, query?: Record<string, string>) {
-		const base = new URL(JIRA_BASE_URL);
-		const basePath = base.pathname.endsWith("/")
-			? base.pathname.slice(0, -1)
-			: base.pathname;
-		const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
-		base.pathname = `${basePath}${path}`;
-		if (query) {
-			for (const [key, value] of Object.entries(query)) {
-				if (value !== undefined && value !== null && value !== "") {
-					base.searchParams.set(key, value);
-				}
-			}
-		}
-		return base.toString();
-	}
-
-	async function jiraRequest<T>(
-		method: string,
-		pathname: string,
-		options: {
-			query?: Record<string, string>;
-			body?: unknown;
-			timeoutMs?: number;
-		} = {},
-	): Promise<T> {
-		const controller = new AbortController();
-		const timeoutMs = options.timeoutMs ?? 30_000;
-		const timeout = setTimeout(() => controller.abort(), timeoutMs);
-		try {
-			const headers = jiraHeaders();
-			const init: RequestInit = {
-				method,
-				headers,
-				signal: controller.signal,
-			};
-			if (options.body !== undefined) {
-				headers["Content-Type"] = "application/json";
-				init.body = JSON.stringify(options.body);
-			}
-			const url = buildJiraUrl(pathname, options.query);
-			const response = await fetch(url, init);
-			const text = await response.text();
-			if (!response.ok) {
-				throw new Error(
-					`jira_error:${response.status}:${response.statusText}:${text}`,
-				);
-			}
-			if (!text.trim()) return undefined as T;
-			try {
-				return JSON.parse(text) as T;
-			} catch {
-				return text as T;
-			}
-		} finally {
-			clearTimeout(timeout);
-		}
-	}
-
-	function getJiraCachedComments(
-		issueKey: string,
-	): { text: string; truncated: boolean } | null {
-		const cached = jiraCommentsCache.get(issueKey);
-		if (!cached) return null;
-		if (Date.now() - cached.at > COMMENTS_CACHE_TTL_MS) {
-			jiraCommentsCache.delete(issueKey);
-			return null;
-		}
-		return cached.value;
-	}
-
-	function setJiraCachedComments(
-		issueKey: string,
-		value: { text: string; truncated: boolean },
-	) {
-		jiraCommentsCache.set(issueKey, { at: Date.now(), value });
-		if (jiraCommentsCache.size <= COMMENTS_CACHE_MAX) return;
-		let oldestKey: string | null = null;
-		let oldestAt = Number.POSITIVE_INFINITY;
-		for (const [key, entry] of jiraCommentsCache.entries()) {
-			if (entry.at < oldestAt) {
-				oldestAt = entry.at;
-				oldestKey = key;
-			}
-		}
-		if (oldestKey) jiraCommentsCache.delete(oldestKey);
-	}
-
-	function buildTrackerUrl(pathname: string, query?: Record<string, string>) {
-		const base = new URL(TRACKER_API_BASE_URL);
-		const basePath = base.pathname.endsWith("/")
-			? base.pathname.slice(0, -1)
-			: base.pathname;
-		const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
-		base.pathname = `${basePath}${path}`;
-		const url = base;
-		if (query) {
-			for (const [key, value] of Object.entries(query)) {
-				if (value !== undefined && value !== null && value !== "") {
-					url.searchParams.set(key, value);
-				}
-			}
-		}
-		return url.toString();
-	}
-
-	async function trackerRequest<T>(
-		method: string,
-		pathname: string,
-		options: {
-			query?: Record<string, string>;
-			body?: unknown;
-			timeoutMs?: number;
-		} = {},
-	): Promise<T> {
-		const controller = new AbortController();
-		const timeoutMs = options.timeoutMs ?? 30_000;
-		const timeout = setTimeout(() => controller.abort(), timeoutMs);
-		try {
-			const headers = trackerHeaders();
-			const init: RequestInit = {
-				method,
-				headers,
-				signal: controller.signal,
-			};
-			if (options.body !== undefined) {
-				headers["Content-Type"] = "application/json";
-				init.body = JSON.stringify(options.body);
-			}
-			const url = buildTrackerUrl(pathname, options.query);
-			const response = await fetch(url, init);
-			const text = await response.text();
-			if (!response.ok) {
-				throw new Error(
-					`tracker_error:${response.status}:${response.statusText}:${text}`,
-				);
-			}
-			if (!text.trim()) return undefined as T;
-			try {
-				return JSON.parse(text) as T;
-			} catch {
-				return text as T;
-			}
-		} finally {
-			clearTimeout(timeout);
-		}
-	}
-
-	async function trackerIssuesFind(options: {
-		query: string;
-		perPage?: number;
-		page?: number;
-		timeoutMs?: number;
-	}) {
-		if (!options.query) return [];
-		return trackerRequest<Array<Record<string, unknown>>>(
-			"POST",
-			"/v3/issues/_search",
-			{
-				query: {
-					perPage: String(options.perPage ?? 100),
-					page: String(options.page ?? 1),
-				},
-				body: { query: options.query },
-				timeoutMs: options.timeoutMs,
-			},
-		);
-	}
-
-	async function trackerIssueGet(issueId: string, timeoutMs?: number) {
-		if (!issueId) throw new Error("missing_issue_id");
-		return trackerRequest<Record<string, unknown>>(
-			"GET",
-			`/v3/issues/${encodeURIComponent(issueId)}`,
-			{ timeoutMs },
-		);
-	}
-
-	async function trackerIssueGetComments(issueId: string, timeoutMs?: number) {
-		if (!issueId) throw new Error("missing_issue_id");
-		return trackerRequest<Array<Record<string, unknown>>>(
-			"GET",
-			`/v3/issues/${encodeURIComponent(issueId)}/comments`,
-			{ timeoutMs },
-		);
-	}
-
-	async function trackerHealthCheck() {
-		return trackerRequest<Record<string, unknown>>("GET", "/v3/myself");
-	}
-
-	type TrackerToolResult = unknown;
-
-	type JiraSearchResponse = {
-		issues?: JiraIssue[];
-	};
-
-	type JiraCommentsResponse = {
-		comments?: Array<{
-			body?: unknown;
-		}>;
-	};
-
-	type JiraSprintResponse = {
-		values?: Array<{
-			id: number;
-			name: string;
-			state?: string;
-			startDate?: string;
-			endDate?: string;
-			completeDate?: string;
-		}>;
-		isLast?: boolean;
-		startAt?: number;
-		maxResults?: number;
-	};
-
-	type JiraSprintIssue = {
-		key?: string;
-		fields?: {
-			summary?: string;
-			status?: { name?: string };
-			assignee?: { displayName?: string };
-			duedate?: string;
-			priority?: { name?: string };
-		};
-	};
-
-	async function jiraIssuesFind(options: {
-		jql: string;
-		maxResults?: number;
-		fields?: string[];
-		timeoutMs?: number;
-	}) {
-		if (!options.jql) return [];
-		const fields = options.fields ?? ["summary", "description"];
-		const payload = {
-			jql: options.jql,
-			maxResults: options.maxResults ?? 50,
-			fields,
-		};
-		const response = await jiraRequest<JiraSearchResponse>(
-			"POST",
-			"/rest/api/3/search/jql",
-			{ body: payload, timeoutMs: options.timeoutMs },
-		);
-		return response.issues ?? [];
-	}
-
-	async function jiraIssueGet(issueKey: string, timeoutMs?: number) {
-		if (!issueKey) throw new Error("missing_issue_key");
-		return jiraRequest<JiraIssue>(
-			"GET",
-			`/rest/api/3/issue/${encodeURIComponent(issueKey)}`,
-			{
-				query: { fields: "summary,description" },
-				timeoutMs,
-			},
-		);
-	}
-
-	async function jiraIssueGetComments(
-		options: { issueKey: string; maxResults?: number },
-		timeoutMs?: number,
-	): Promise<{ text: string; truncated: boolean }> {
-		if (!options.issueKey) throw new Error("missing_issue_key");
-		const response = await jiraRequest<JiraCommentsResponse>(
-			"GET",
-			`/rest/api/3/issue/${encodeURIComponent(options.issueKey)}/comment`,
-			{
-				query: { maxResults: String(options.maxResults ?? 100) },
-				timeoutMs,
-			},
-		);
-		const comments = response.comments ?? [];
-		const texts = comments.map((comment) => extractJiraText(comment.body));
-		const joined = texts.join("\n\n").trim();
-		const truncated = joined.length > 4000;
-		return { text: joined.slice(0, 4000), truncated };
-	}
-
-	async function jiraSprintsList(
-		boardId: number,
-		timeoutMs?: number,
-	): Promise<JiraSprintResponse["values"]> {
-		const results: NonNullable<JiraSprintResponse["values"]> = [];
-		let startAt = 0;
-		const maxResults = 50;
-		while (true) {
-			const response = await jiraRequest<JiraSprintResponse>(
-				"GET",
-				`/rest/agile/1.0/board/${encodeURIComponent(String(boardId))}/sprint`,
-				{
-					query: {
-						startAt: String(startAt),
-						maxResults: String(maxResults),
-						state: "active,future,closed",
-					},
-					timeoutMs,
-				},
-			);
-			const values = response.values ?? [];
-			results.push(...values);
-			if (response.isLast || values.length === 0) break;
-			startAt += maxResults;
-		}
-		return results;
-	}
-
-	async function jiraSprintFindByName(boardId: number, name: string) {
-		const target = normalizeSprintName(name);
-		const sprints = (await jiraSprintsList(boardId, 30_000)) ?? [];
-		const exact = sprints.find(
-			(sprint) => normalizeSprintName(sprint.name ?? "") === target,
-		);
-		if (exact) return exact;
-		return sprints.find((sprint) =>
-			normalizeSprintName(sprint.name ?? "").includes(target),
-		);
-	}
-
-	async function jiraSprintIssues(sprintId: number, maxResults?: number) {
-		const results: JiraSprintIssue[] = [];
-		let startAt = 0;
-		const pageSize = Math.min(Math.max(maxResults ?? 50, 1), 100);
-		while (results.length < (maxResults ?? Number.POSITIVE_INFINITY)) {
-			const response = await jiraRequest<{ issues?: JiraSprintIssue[] }>(
-				"GET",
-				`/rest/agile/1.0/sprint/${encodeURIComponent(String(sprintId))}/issue`,
-				{
-					query: {
-						startAt: String(startAt),
-						maxResults: String(pageSize),
-						fields: "summary,status,assignee,duedate,priority",
-					},
-					timeoutMs: 30_000,
-				},
-			);
-			const batch = response.issues ?? [];
-			results.push(...batch);
-			if (batch.length < pageSize) break;
-			startAt += pageSize;
-			if (maxResults && results.length >= maxResults) break;
-		}
-		return results.slice(0, maxResults ?? results.length).map((issue) => ({
-			key: issue.key ?? "",
-			summary:
-				typeof issue.fields?.summary === "string" ? issue.fields.summary : "",
-			status: issue.fields?.status?.name ?? "",
-			assignee: issue.fields?.assignee?.displayName ?? "",
-			dueDate: issue.fields?.duedate ?? "",
-			priority: issue.fields?.priority?.name ?? "",
-		}));
 	}
 
 	function logJiraAudit(
@@ -2490,131 +774,6 @@ export async function createBot(options: CreateBotOptions) {
 		};
 		const level = outcome === "error" ? "error" : "info";
 		logger[level](payload);
-	}
-
-	function extractIssueKey(args: Record<string, unknown>): string | undefined {
-		const raw = args.issue_id ?? args.issueId ?? args.key;
-		return typeof raw === "string" && raw.trim().length > 0
-			? raw.trim()
-			: undefined;
-	}
-
-	function logTrackerAudit(
-		ctx: BotContext | undefined,
-		toolName: string,
-		args: Record<string, unknown>,
-		outcome: "success" | "error",
-		error?: string,
-		durationMs?: number,
-	) {
-		const context = ctx ? getLogContext(ctx) : {};
-		const issueKey = extractIssueKey(args);
-		const query = typeof args.query === "string" ? args.query : undefined;
-		const payload = {
-			event: "tracker_tool",
-			outcome,
-			tool: toolName,
-			issue_key: issueKey,
-			query_len: query ? query.length : undefined,
-			request_id: context.request_id,
-			chat_id: context.chat_id,
-			user_id: context.user_id,
-			username: context.username,
-			duration_ms: durationMs,
-			error,
-		};
-		const level = outcome === "error" ? "error" : "info";
-		logger[level](payload);
-	}
-
-	async function trackerCallTool<T = TrackerToolResult>(
-		toolName: string,
-		args: Record<string, unknown>,
-		timeoutMs: number,
-		ctx?: BotContext,
-	): Promise<T> {
-		lastTrackerCallAt = Date.now();
-		if (ctx) {
-			setLogContext(ctx, {
-				tool: toolName,
-				issue_key: extractIssueKey(args),
-			});
-		}
-		const startedAt = Date.now();
-		try {
-			switch (toolName) {
-				case "issues_find": {
-					const query = String(args.query ?? "");
-					const perPage = Number(args.per_page ?? args.perPage ?? 100);
-					const page = Number(args.page ?? 1);
-					const result = await trackerIssuesFind({
-						query,
-						perPage: Number.isFinite(perPage) ? perPage : 100,
-						page: Number.isFinite(page) ? page : 1,
-						timeoutMs,
-					});
-					logTrackerAudit(
-						ctx,
-						toolName,
-						args,
-						"success",
-						undefined,
-						Date.now() - startedAt,
-					);
-					return result as T;
-				}
-				case "issue_get": {
-					const issueId = String(args.issue_id ?? "");
-					const result = await trackerIssueGet(issueId, timeoutMs);
-					logTrackerAudit(
-						ctx,
-						toolName,
-						args,
-						"success",
-						undefined,
-						Date.now() - startedAt,
-					);
-					return result as T;
-				}
-				case "issue_get_comments": {
-					const issueId = String(args.issue_id ?? "");
-					const result = await trackerIssueGetComments(issueId, timeoutMs);
-					logTrackerAudit(
-						ctx,
-						toolName,
-						args,
-						"success",
-						undefined,
-						Date.now() - startedAt,
-					);
-					return result as T;
-				}
-				case "issue_get_url": {
-					const issueId = String(args.issue_id ?? "");
-					logTrackerAudit(
-						ctx,
-						toolName,
-						args,
-						"success",
-						undefined,
-						Date.now() - startedAt,
-					);
-					return `https://tracker.yandex.ru/${issueId}` as unknown as T;
-				}
-				default:
-					throw new Error(`unknown_tool:${toolName}`);
-			}
-		} catch (error) {
-			logTrackerAudit(
-				ctx,
-				toolName,
-				args,
-				"error",
-				String(error),
-				Date.now() - startedAt,
-			);
-			throw error;
-		}
 	}
 
 	function withTimeout<T>(
@@ -2650,8 +809,6 @@ export async function createBot(options: CreateBotOptions) {
 		if (mins > 0) return `${mins}m ${secs}s`;
 		return `${secs}s`;
 	}
-
-	const cronClient = options.cronClient;
 
 	const startKeyboard = new InlineKeyboard()
 		.text("Помощь", "cmd:help")
@@ -2709,7 +866,7 @@ export async function createBot(options: CreateBotOptions) {
 		trackerHealthCheck,
 		formatUptime,
 		getUptimeSeconds: options.getUptimeSeconds,
-		getLastTrackerCallAt: () => lastTrackerCallAt,
+		getLastTrackerCallAt,
 	});
 
 	async function loadTelegramImageParts(
@@ -2767,58 +924,6 @@ export async function createBot(options: CreateBotOptions) {
 				filename,
 			}),
 		];
-	}
-
-	function buildUserUIMessage(text: string, files?: FilePart[]): UIMessage {
-		const parts: UIMessage["parts"] = [];
-		if (text) {
-			parts.push({ type: "text", text });
-		}
-		for (const file of files ?? []) {
-			parts.push({
-				type: "file",
-				mediaType: file.mediaType,
-				filename: file.filename,
-				url: file.url,
-			});
-		}
-		if (parts.length === 0) {
-			parts.push({ type: "text", text: "" });
-		}
-		return {
-			id: crypto.randomUUID(),
-			role: "user",
-			parts,
-		};
-	}
-
-	function createAgentStreamWithTools(
-		agent: ToolLoopAgent,
-		text: string,
-		files?: FilePart[],
-		onToolStep?: (toolNames: string[]) => Promise<void> | void,
-		abortSignal?: AbortSignal,
-	): ReadableStream<UIMessageChunk> {
-		const uiMessages = [buildUserUIMessage(text, files)];
-		return createUIMessageStream<UIMessage>({
-			execute: async ({ writer }) => {
-				const stream = await createAgentUIStream({
-					agent,
-					uiMessages,
-					abortSignal,
-					onStepFinish: ({ toolCalls }) => {
-						const names = (toolCalls ?? [])
-							.map((call) => call?.toolName)
-							.filter((name): name is string => Boolean(name));
-						if (names.length > 0) {
-							writer.write({ type: "data-tools", data: { tools: names } });
-							onToolStep?.(names);
-						}
-					},
-				});
-				writer.merge(stream);
-			},
-		});
 	}
 
 	type LocalChatOptions = {
@@ -3125,8 +1230,8 @@ export async function createBot(options: CreateBotOptions) {
 					const issuesData = await Promise.all(
 						jiraKeys.slice(0, 5).map(async (key) => {
 							const [issueResult, commentResult] = await Promise.all([
-								jiraIssueGet(key, 30_000),
-								jiraIssueGetComments({ issueKey: key }, 30_000),
+								jiraIssueGet(key, 8_000),
+								jiraIssueGetComments({ issueKey: key }, 8_000),
 							]);
 							return {
 								key,
@@ -3218,11 +1323,11 @@ export async function createBot(options: CreateBotOptions) {
 					const issuesData = await Promise.all(
 						issueKeys.slice(0, 5).map(async (key) => {
 							const [issueResult, commentResult] = await Promise.all([
-								trackerCallTool("issue_get", { issue_id: key }, 30_000, ctx),
+								trackerCallTool("issue_get", { issue_id: key }, 8_000, ctx),
 								trackerCallTool(
 									"issue_get_comments",
 									{ issue_id: key },
-									30_000,
+									8_000,
 									ctx,
 								),
 							]);
@@ -3311,8 +1416,8 @@ export async function createBot(options: CreateBotOptions) {
 			if (issueKey && isJiraIssueKey(issueKey)) {
 				try {
 					const [issueResult, commentResult] = await Promise.all([
-						jiraIssueGet(issueKey, 30_000),
-						jiraIssueGetComments({ issueKey }, 30_000),
+						jiraIssueGet(issueKey, 8_000),
+						jiraIssueGetComments({ issueKey }, 8_000),
 					]);
 					const issueText = JSON.stringify(
 						normalizeJiraIssue(issueResult),
@@ -3398,11 +1503,11 @@ export async function createBot(options: CreateBotOptions) {
 			if (issueKey && trackerKeys.length === issueKeys.length) {
 				try {
 					const [issueResult, commentResult] = await Promise.all([
-						trackerCallTool("issue_get", { issue_id: issueKey }, 30_000, ctx),
+						trackerCallTool("issue_get", { issue_id: issueKey }, 8_000, ctx),
 						trackerCallTool(
 							"issue_get_comments",
 							{ issue_id: issueKey },
-							30_000,
+							8_000,
 							ctx,
 						),
 					]);
@@ -3690,8 +1795,8 @@ export async function createBot(options: CreateBotOptions) {
 				const issuesData = await Promise.all(
 					jiraKeys.slice(0, 5).map(async (key) => {
 						const [issueResult, commentResult] = await Promise.all([
-							jiraIssueGet(key, 30_000),
-							jiraIssueGetComments({ issueKey: key }, 30_000),
+							jiraIssueGet(key, 8_000),
+							jiraIssueGetComments({ issueKey: key }, 8_000),
 						]);
 						return {
 							key,
@@ -3749,11 +1854,11 @@ export async function createBot(options: CreateBotOptions) {
 				const issuesData = await Promise.all(
 					issueKeys.slice(0, 5).map(async (key) => {
 						const [issueResult, commentResult] = await Promise.all([
-							trackerCallTool("issue_get", { issue_id: key }, 30_000, ctx),
+							trackerCallTool("issue_get", { issue_id: key }, 8_000, ctx),
 							trackerCallTool(
 								"issue_get_comments",
 								{ issue_id: key },
-								30_000,
+								8_000,
 								ctx,
 							),
 						]);
@@ -3808,8 +1913,8 @@ export async function createBot(options: CreateBotOptions) {
 			const issueKey = issueKeys[0] ?? null;
 			if (issueKey && isJiraIssueKey(issueKey)) {
 				const [issueResult, commentResult] = await Promise.all([
-					jiraIssueGet(issueKey, 30_000),
-					jiraIssueGetComments({ issueKey }, 30_000),
+					jiraIssueGet(issueKey, 8_000),
+					jiraIssueGetComments({ issueKey }, 8_000),
 				]);
 				const issueText = JSON.stringify(
 					normalizeJiraIssue(issueResult),
@@ -3858,11 +1963,11 @@ export async function createBot(options: CreateBotOptions) {
 
 			if (issueKey && trackerKeys.length === issueKeys.length) {
 				const [issueResult, commentResult] = await Promise.all([
-					trackerCallTool("issue_get", { issue_id: issueKey }, 30_000, ctx),
+					trackerCallTool("issue_get", { issue_id: issueKey }, 8_000, ctx),
 					trackerCallTool(
 						"issue_get_comments",
 						{ issue_id: issueKey },
-						30_000,
+						8_000,
 						ctx,
 					),
 				]);
