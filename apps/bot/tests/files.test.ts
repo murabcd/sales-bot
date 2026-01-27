@@ -12,7 +12,10 @@ describe("isPdfDocument", () => {
 
 	it("returns false for non-PDF", () => {
 		expect(
-			isPdfDocument({ mimeType: "application/octet-stream", fileName: "a.bin" }),
+			isPdfDocument({
+				mimeType: "application/octet-stream",
+				fileName: "a.bin",
+			}),
 		).toBe(false);
 	});
 });
