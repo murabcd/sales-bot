@@ -52,6 +52,60 @@ export function buildAgentInstructions(
 
 	const soulBlock = buildSoulBlock(options);
 
+	const toolSections: string[] = [
+		"Tool Use:",
+		"- Use the appropriate tool for the task. Summarize results in Russian and do not invent facts.",
+		"- If a tool is blocked with approval_required, ask the user to run /approve <tool> and retry.",
+		"- Always include required params for each tool.",
+	];
+
+	if (options.toolLines.includes("tracker_search")) {
+		toolSections.push(
+			"- Use `tracker_search` for Yandex Tracker keyword queries, `issue_get` for specific issues.",
+			"- If search returns ambiguous=true with candidates, ask the user to pick the correct issue key (list up to 3).",
+		);
+	}
+
+	if (options.toolLines.includes("jira_search")) {
+		toolSections.push(
+			"- Use `jira_search` for Jira keyword queries, `jira_issue_get` for specific issues, `jira_sprint_issues` for sprints.",
+		);
+	}
+
+	if (options.toolLines.includes("web_search")) {
+		toolSections.push(
+			"- Use `web_search` for up-to-date information (news, prices, public facts). Include a short Sources list with URLs.",
+		);
+	}
+
+	if (
+		options.toolLines.includes("searchMemories") ||
+		options.toolLines.includes("addMemory")
+	) {
+		toolSections.push(
+			"- Use `searchMemories` to recall prior context, `addMemory` to store durable facts.",
+		);
+	}
+
+	if (
+		options.toolLines.includes("posthog") ||
+		options.toolLines.includes("insights") ||
+		options.toolLines.includes("survey")
+	) {
+		toolSections.push(
+			"- Use PostHog tools for analytics: insights, surveys, experiments, feature flags, dashboards.",
+		);
+	}
+
+	if (
+		options.toolLines.includes("cron_schedule") ||
+		options.toolLines.includes("cron_list")
+	) {
+		toolSections.push(
+			"- Use cron tools to schedule recurring reports or reminders.",
+		);
+	}
+
 	return [
 		buildSystemPrompt({
 			modelRef: options.modelRef,
@@ -59,21 +113,7 @@ export function buildAgentInstructions(
 			reasoning: options.reasoning,
 		}),
 		soulBlock ? `\n${soulBlock}` : "",
-		"Tool Use:",
-		"- Prefer `tracker_search` for integration/status/estimate questions when no exact issue key is provided.",
-		"- Prefer Jira tools for FL-* issues, sprints, or FLOM board requests.",
-		...(options.toolLines.includes("web_search")
-			? [
-					"- Use `web_search` for up-to-date information outside Tracker (news, prices, public facts).",
-					"- If you use `web_search`, include a short Sources list with URLs.",
-				]
-			: []),
-		"- Use Tracker or Jira tools when needed. If you use tools, summarize results in Russian and do not invent facts.",
-		"- For Jira sprints/boards, use `jira_sprint_issues` with sprint name or id (board defaults to FLOM when configured).",
-		"- If a tool is blocked with approval_required, ask the user to run /approve <tool> and retry.",
-		"- Always include required params. Example: issues_find requires query; issue_get and issue_get_comments require issue_id.",
-		"- If tracker_search returns ambiguous=true with candidates, ask the user to pick the correct issue key (list up to 3 keys).",
-		"- Be concise and helpful; expand only if asked.",
+		...toolSections,
 		"",
 		"Available tools:",
 		options.toolLines || "(none)",
@@ -120,7 +160,6 @@ export function buildIssueAgentInstructions(
 		"- Use the provided issue data and comments to answer.",
 		"- Do not ask for issue_id; it is already provided.",
 		"- If price/status/terms are not present in data, say they are not recorded.",
-		"- Be concise and helpful; expand only if asked.",
 		options.userName ? `User name: ${options.userName}` : "",
 		`User: ${options.question}`,
 	].join("\n");
