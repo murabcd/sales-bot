@@ -65,6 +65,7 @@ import {
 	loadHistoryMessages,
 	setSupermemoryConfig,
 } from "./lib/context/session-history.js";
+import { type FilePart, toFilePart } from "./lib/files.js";
 import { type ImageFilePart, toImageFilePart } from "./lib/images.js";
 import {
 	buildJiraJql,
@@ -211,6 +212,10 @@ export async function createBot(options: CreateBotOptions) {
 	const TELEGRAM_GROUP_REQUIRE_MENTION =
 		env.TELEGRAM_GROUP_REQUIRE_MENTION !== "0";
 	const IMAGE_MAX_BYTES = Number.parseInt(env.IMAGE_MAX_BYTES ?? "5000000", 10);
+	const DOCUMENT_MAX_BYTES = Number.parseInt(
+		env.DOCUMENT_MAX_BYTES ?? "10000000",
+		10,
+	);
 	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
 	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
 	const TOOL_RATE_LIMITS = env.TOOL_RATE_LIMITS ?? "";
@@ -2731,10 +2736,38 @@ export async function createBot(options: CreateBotOptions) {
 		return imagePart ? [imagePart] : [];
 	}
 
-	function buildUserUIMessage(
-		text: string,
-		files?: ImageFilePart[],
-	): UIMessage {
+	async function loadTelegramPdfParts(ctx: BotContext): Promise<FilePart[]> {
+		const document = ctx.message?.document;
+		if (!document?.file_id) return [];
+		const fileName = document.file_name;
+		const mimeType = document.mime_type?.toLowerCase();
+		const isPdf =
+			mimeType === "application/pdf" ||
+			(fileName?.toLowerCase().endsWith(".pdf") ?? false);
+		if (!isPdf) return [];
+		const file = await ctx.api.getFile(document.file_id);
+		if (!file.file_path) return [];
+		const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+		const response = await fetch(downloadUrl);
+		if (!response.ok) {
+			throw new Error(`document_download_failed:${response.status}`);
+		}
+		const buffer = new Uint8Array(await response.arrayBuffer());
+		if (buffer.byteLength > DOCUMENT_MAX_BYTES) {
+			throw new Error(`document_too_large:${buffer.byteLength}`);
+		}
+		const filename =
+			fileName ?? file.file_path.split("/").pop() ?? "document.pdf";
+		return [
+			toFilePart({
+				buffer,
+				mediaType: "application/pdf",
+				filename,
+			}),
+		];
+	}
+
+	function buildUserUIMessage(text: string, files?: FilePart[]): UIMessage {
 		const parts: UIMessage["parts"] = [];
 		if (text) {
 			parts.push({ type: "text", text });
@@ -2760,7 +2793,7 @@ export async function createBot(options: CreateBotOptions) {
 	function createAgentStreamWithTools(
 		agent: ToolLoopAgent,
 		text: string,
-		files?: ImageFilePart[],
+		files?: FilePart[],
 		onToolStep?: (toolNames: string[]) => Promise<void> | void,
 		abortSignal?: AbortSignal,
 	): ReadableStream<UIMessageChunk> {
@@ -2788,7 +2821,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	type LocalChatOptions = {
 		text: string;
-		files?: ImageFilePart[];
+		files?: FilePart[];
 		webSearchEnabled?: boolean;
 		chatId?: string;
 		userId?: string;
@@ -2926,6 +2959,23 @@ export async function createBot(options: CreateBotOptions) {
 		}
 	});
 
+	bot.on("message:document", async (ctx) => {
+		setLogContext(ctx, { message_type: "document" });
+		const caption = ctx.message.caption?.trim() ?? "";
+		try {
+			const files = await loadTelegramPdfParts(ctx);
+			if (files.length === 0) {
+				await sendText(ctx, "Поддерживаются только PDF документы.");
+				return;
+			}
+			await handleIncomingText(ctx, caption, files);
+		} catch (error) {
+			logDebug("document handling error", { error: String(error) });
+			setLogError(ctx, error);
+			await sendText(ctx, `Ошибка: ${String(error)}`);
+		}
+	});
+
 	bot.on("message:voice", async (ctx) => {
 		setLogContext(ctx, { message_type: "voice" });
 		const voice = ctx.message.voice;
@@ -2987,7 +3037,7 @@ export async function createBot(options: CreateBotOptions) {
 	async function handleIncomingText(
 		ctx: BotContext,
 		rawText: string,
-		files: ImageFilePart[] = [],
+		files: FilePart[] = [],
 		webSearchEnabled?: boolean,
 	) {
 		const text = rawText.trim();
@@ -3033,7 +3083,7 @@ export async function createBot(options: CreateBotOptions) {
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
 			const promptText =
-				text || (files.length > 0 ? "Analyze the attached image." : text);
+				text || (files.length > 0 ? "Analyze the attached file." : text);
 			const allowWebSearch =
 				typeof webSearchEnabled === "boolean"
 					? webSearchEnabled
@@ -3560,7 +3610,7 @@ export async function createBot(options: CreateBotOptions) {
 	async function handleIncomingTextStream(
 		ctx: BotContext,
 		rawText: string,
-		files: ImageFilePart[] = [],
+		files: FilePart[] = [],
 		webSearchEnabled?: boolean,
 		abortSignal?: AbortSignal,
 	): Promise<ReadableStream<UIMessageChunk>> {
@@ -3599,7 +3649,7 @@ export async function createBot(options: CreateBotOptions) {
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
 			const promptText =
-				text || (files.length > 0 ? "Analyze the attached image." : text);
+				text || (files.length > 0 ? "Analyze the attached file." : text);
 			const allowWebSearch =
 				typeof webSearchEnabled === "boolean"
 					? webSearchEnabled
