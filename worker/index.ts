@@ -9,6 +9,7 @@ import type {
 import type { Update } from "grammy/types";
 import modelsConfig from "../apps/bot/config/models.json";
 import runtimeSkills from "../apps/bot/config/runtime-skills.json";
+import soulConfig from "../apps/bot/config/soul.json";
 import { createBot } from "../apps/bot/src/bot.js";
 import { authorizeAdminRequest } from "../apps/bot/src/lib/gateway/admin-auth.js";
 import {
@@ -35,6 +36,7 @@ import {
 import { SessionsDO } from "./sessions-do.js";
 
 const startTime = Date.now();
+const SOUL_PROMPT = typeof soulConfig?.text === "string" ? soulConfig.text : "";
 
 type Env = Record<string, string | undefined> & {
 	UPDATES_DO: DurableObjectNamespace;
@@ -77,6 +79,8 @@ function getUptimeSeconds() {
 async function getBot(env: Record<string, string | undefined>) {
 	if (!botPromise) {
 		botPromise = (async () => {
+			const effectiveEnv =
+				SOUL_PROMPT.trim().length > 0 ? { ...env, SOUL_PROMPT } : env;
 			const cronClient = {
 				list: async (params?: { includeDisabled?: boolean }) => {
 					const response = await callCron(env as Env, "/list", params ?? {});
@@ -108,7 +112,7 @@ async function getBot(env: Record<string, string | undefined>) {
 				},
 			};
 			const runtime = await createBot({
-				env,
+				env: effectiveEnv,
 				modelsConfig,
 				runtimeSkills,
 				getUptimeSeconds,
@@ -433,6 +437,65 @@ async function writeGatewayConfig(env: Env, config: GatewayConfig) {
 	return payload.config ?? {};
 }
 
+async function handleHealthCheck(env: Env): Promise<Response> {
+	const uptimeSeconds = getUptimeSeconds();
+	const checks: Record<
+		string,
+		{ status: "ok" | "error"; latencyMs?: number; error?: string }
+	> = {};
+
+	// Check Sessions DO
+	try {
+		const start = Date.now();
+		const response = await callSessions(env, "/list", { limit: 1 });
+		checks.sessions = {
+			status: response.ok ? "ok" : "error",
+			latencyMs: Date.now() - start,
+		};
+	} catch (error) {
+		checks.sessions = { status: "error", error: String(error) };
+	}
+
+	// Check Cron DO
+	try {
+		const start = Date.now();
+		const response = await callCron(env, "/list", {});
+		checks.cron = {
+			status: response.ok ? "ok" : "error",
+			latencyMs: Date.now() - start,
+		};
+	} catch (error) {
+		checks.cron = { status: "error", error: String(error) };
+	}
+
+	// Check Channels DO
+	try {
+		const start = Date.now();
+		const response = await callChannels(env, "/list", { limit: 1 });
+		checks.channels = {
+			status: response.ok ? "ok" : "error",
+			latencyMs: Date.now() - start,
+		};
+	} catch (error) {
+		checks.channels = { status: "error", error: String(error) };
+	}
+
+	const allHealthy = Object.values(checks).every((c) => c.status === "ok");
+
+	return new Response(
+		JSON.stringify({
+			status: allHealthy ? "healthy" : "degraded",
+			uptimeSeconds: Math.round(uptimeSeconds),
+			checks,
+			timestamp: new Date().toISOString(),
+		}),
+		{
+			status: allHealthy ? 200 : 503,
+			headers: { "Content-Type": "application/json" },
+		},
+	);
+}
+
 export default {
 	async fetch(
 		request: WorkerRequest,
@@ -440,6 +503,11 @@ export default {
 		_ctx: ExecutionContext,
 	): Promise<WorkerResponse> {
 		const url = new URL(request.url);
+
+		if (url.pathname === "/health") {
+			return toWorkerResponse(await handleHealthCheck(env));
+		}
+
 		if (url.pathname === "/gateway" && isWebSocketUpgrade(request)) {
 			return handleGatewayWebSocket(request, env);
 		}
