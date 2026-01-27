@@ -58,6 +58,8 @@ policies as Telegram). It is meant for debugging and does not persist history.
 - Streaming: UI uses AI SDK `useChat` with a gateway transport.
 - Markdown: assistant messages render via Streamdown.
 - Tool visibility: tool calls are surfaced as `Tools: ...` hints during streams.
+- Image prompts: attach one or more images (PNG/JPEG/GIF/WebP) and optionally add a caption.
+- Web search: the Search toggle defaults from `WEB_SEARCH_ENABLED` and can be overridden per message.
 
 Stopping a response uses `chat.abort`, which cancels the in-flight stream.
 
