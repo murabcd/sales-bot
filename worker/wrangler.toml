@@ -46,6 +46,14 @@ name = "UPDATES_DO"
 class_name = "TelegramUpdatesDO"
 
 [[durable_objects.bindings]]
+name = "CHANNELS_DO"
+class_name = "ChannelsDO"
+
+[[durable_objects.bindings]]
+name = "CRON_DO"
+class_name = "CronDO"
+
+[[durable_objects.bindings]]
 name = "GATEWAY_CONFIG_DO"
 class_name = "GatewayConfigDO"
 
@@ -53,13 +61,6 @@ class_name = "GatewayConfigDO"
 name = "SESSIONS_DO"
 class_name = "SessionsDO"
 
-[[durable_objects.bindings]]
-name = "CRON_DO"
-class_name = "CronDO"
-
-[[durable_objects.bindings]]
-name = "CHANNELS_DO"
-class_name = "ChannelsDO"
 
 [[migrations]]
 tag = "v1"
