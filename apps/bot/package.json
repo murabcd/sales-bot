@@ -4,10 +4,11 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
-		"dev": "bun run build:skills && tsx src/index.ts",
+		"dev": "bun run build:skills && bun run build:soul && tsx src/index.ts",
 		"start": "node --enable-source-maps dist/index.js",
-		"build": "tsx scripts/build-runtime-skills.ts && tsc -p tsconfig.json",
+		"build": "tsx scripts/build-runtime-skills.ts && tsx scripts/build-soul.ts && tsc -p tsconfig.json",
 		"build:skills": "tsx scripts/build-runtime-skills.ts",
+		"build:soul": "tsx scripts/build-soul.ts",
 		"check": "biome check --write src tests scripts config",
 		"type-check": "tsc --noEmit -p tsconfig.json",
 		"test": "vitest run --config vitest.config.ts"
@@ -21,10 +22,12 @@
 		"ai": "^6.0.49",
 		"dotenv": "^16.6.1",
 		"grammy": "^1.39.3",
+		"markdown-it": "^14.1.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@types/node": "^22.15.21",
+		"@types/markdown-it": "^14.1.2",
 		"@vitest/coverage-v8": "^4.0.18",
 		"tsx": "^4.21.0",
 		"typescript": "^5.9.3",

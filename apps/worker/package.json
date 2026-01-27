@@ -4,6 +4,7 @@
 	"version": "0.1.0",
 	"scripts": {
 		"dev": "bunx wrangler dev --config ../../worker/wrangler.toml",
+		"predeploy": "cd ../../apps/bot && bun run build:soul",
 		"deploy": "bunx wrangler deploy --config ../../worker/wrangler.toml",
 		"test": "vitest run --config vitest.config.ts"
 	},
