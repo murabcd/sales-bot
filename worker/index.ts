@@ -218,6 +218,49 @@ function resolveTelegramChannel(update: Update) {
 	};
 }
 
+function resolveTelegramThreadId(update: Update) {
+	const payload = (update as Update & Record<string, unknown>) ?? {};
+	const message =
+		(payload.message as { message_thread_id?: number } | undefined) ??
+		(payload.edited_message as { message_thread_id?: number } | undefined) ??
+		(payload.channel_post as { message_thread_id?: number } | undefined) ??
+		(payload.edited_channel_post as { message_thread_id?: number } | undefined) ??
+		(payload.callback_query as { message?: { message_thread_id?: number } } | undefined)?.message ??
+		undefined;
+	const threadId = message?.message_thread_id;
+	return typeof threadId === "number" ? threadId : undefined;
+}
+
+type ChannelConfig = {
+	enabled?: boolean;
+	requireMention?: boolean;
+	allowUserIds?: string[];
+	skillsAllowlist?: string[];
+	skillsDenylist?: string[];
+	systemPrompt?: string;
+};
+
+function mergeChannelConfig(
+	base?: ChannelConfig,
+	override?: ChannelConfig,
+): ChannelConfig | undefined {
+	if (!base && !override) return undefined;
+	return {
+		enabled: override?.enabled ?? base?.enabled,
+		requireMention: override?.requireMention ?? base?.requireMention,
+		allowUserIds: Array.isArray(override?.allowUserIds)
+			? override.allowUserIds
+			: base?.allowUserIds,
+		skillsAllowlist: Array.isArray(override?.skillsAllowlist)
+			? override.skillsAllowlist
+			: base?.skillsAllowlist,
+		skillsDenylist: Array.isArray(override?.skillsDenylist)
+			? override.skillsDenylist
+			: base?.skillsDenylist,
+		systemPrompt: override?.systemPrompt ?? base?.systemPrompt,
+	};
+}
+
 async function touchTelegramSession(env: Env, update: Update) {
 	const session = resolveTelegramSession(update);
 	if (!session) return;
@@ -227,21 +270,34 @@ async function touchTelegramSession(env: Env, update: Update) {
 async function touchTelegramChannel(env: Env, update: Update) {
 	const channel = resolveTelegramChannel(update);
 	if (!channel) return { enabled: true };
-	const response = await callChannels(env, "/touch", channel);
-	if (!response.ok) return { enabled: true };
-	const payload = (await response.json()) as {
-		entry?: {
-			enabled?: boolean;
-			requireMention?: boolean;
-			allowUserIds?: string[];
-			skillsAllowlist?: string[];
-			skillsDenylist?: string[];
-			systemPrompt?: string;
+
+	const groupResponse = await callChannels(env, "/touch", channel);
+	const groupPayload = groupResponse.ok
+		? ((await groupResponse.json()) as { entry?: ChannelConfig })
+		: undefined;
+	const groupConfig = groupPayload?.entry;
+
+	const threadId = resolveTelegramThreadId(update);
+	if (!threadId) {
+		return {
+			enabled: groupConfig?.enabled !== false,
+			config: groupConfig,
 		};
+	}
+
+	const topic = {
+		...channel,
+		key: `${channel.key}:${threadId}`,
 	};
+	const topicResponse = await callChannels(env, "/touch", topic);
+	const topicPayload = topicResponse.ok
+		? ((await topicResponse.json()) as { entry?: ChannelConfig })
+		: undefined;
+	const mergedConfig = mergeChannelConfig(groupConfig, topicPayload?.entry);
+
 	return {
-		enabled: payload?.entry?.enabled !== false,
-		config: payload?.entry,
+		enabled: mergedConfig?.enabled !== false,
+		config: mergedConfig,
 	};
 }
 
@@ -1144,7 +1200,20 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 
 		if (method === "chat.send") {
 			const text = typeof params?.text === "string" ? params.text.trim() : "";
-			if (!text) {
+			const files = Array.isArray(params?.files)
+				? params.files.filter(
+						(file): file is { mediaType: string; url: string; filename?: string } =>
+							typeof file === "object" &&
+							file !== null &&
+							typeof (file as { mediaType?: unknown }).mediaType === "string" &&
+							typeof (file as { url?: unknown }).url === "string",
+					)
+				: [];
+			const webSearchEnabled =
+				typeof params?.webSearchEnabled === "boolean"
+					? params.webSearchEnabled
+					: undefined;
+			if (!text && files.length === 0) {
 				sendResponse(id, false, undefined, toGatewayError("empty_text"));
 				return;
 			}
@@ -1172,6 +1241,8 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 					const runtime = await getBot(env);
 					const result = await runtime.runLocalChat({
 						text,
+						files,
+						webSearchEnabled,
 						chatId,
 						userId,
 						userName,
@@ -1193,13 +1264,18 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			void (async () => {
 				try {
 					const runtime = await getBot(env);
-					const result = await runtime.runLocalChatStream({
-						text,
-						chatId,
-						userId,
-						userName,
-						chatType,
-					}, abortController.signal);
+					const result = await runtime.runLocalChatStream(
+						{
+							text,
+							files,
+							webSearchEnabled,
+							chatId,
+							userId,
+							userName,
+							chatType,
+						},
+						abortController.signal,
+					);
 					const reader = result.stream.getReader();
 					while (true) {
 						const { value, done } = await reader.read();
