@@ -2,11 +2,12 @@
 
 import { generateId } from "ai";
 import { useChat } from "@ai-sdk/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useGateway } from "@/components/gateway-provider";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { GatewayChatTransport } from "@/lib/gateway-chat-transport";
 import { ChatInput } from "./chat-input";
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import type { AdminUIMessage } from "./chat-messages";
 import { ChatMessages } from "./chat-messages";
 
@@ -20,8 +21,7 @@ export function DashboardChat({
 	children,
 }: DashboardChatProps) {
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const [input, setInput] = useState("");
-	const { streamChat, abortChat } = useGateway();
+	const { streamChat, abortChat, config } = useGateway();
 
 	// Generate a chat ID if not provided
 	const chatId = useMemo(() => routeChatId ?? generateId(), [routeChatId]);
@@ -48,13 +48,20 @@ export function DashboardChat({
 		}
 	}, [messagesLength, hasMessages]);
 
-	const handleSubmit = async (e: React.FormEvent) => {
-		e.preventDefault();
-		const text = input.trim();
-		if (!text || isLoading) return;
-		setInput("");
-		sendMessage({ text });
+	const handleSubmit = async (
+		message: PromptInputMessage & { webSearchEnabled?: boolean },
+	) => {
+		if (isLoading) return;
+		sendMessage({
+			text: message.text ?? "",
+			files: message.files ?? [],
+			metadata: {
+				webSearchEnabled: message.webSearchEnabled,
+			},
+		});
 	};
+
+	const defaultWebSearchEnabled = config.WEB_SEARCH_ENABLED === "1";
 
 	return (
 		<div className="relative flex flex-col h-[calc(100vh-56px-48px)] -m-6">
@@ -79,12 +86,10 @@ export function DashboardChat({
 			<div className="absolute bottom-0 left-0 right-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
 				<div className="max-w-2xl mx-auto w-full p-4">
 					<ChatInput
-						value={input}
-						onChange={(e) => setInput(e.target.value)}
-						onSubmit={handleSubmit}
+						defaultWebSearchEnabled={defaultWebSearchEnabled}
+						status={status}
 						onStop={stop}
-						isLoading={isLoading}
-						placeholder="Ask anything about the system..."
+						onSubmitMessage={handleSubmit}
 					/>
 				</div>
 			</div>

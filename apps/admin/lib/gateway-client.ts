@@ -252,6 +252,8 @@ export class GatewayClient {
 
 	chatSend(params: {
 		text: string;
+		files?: Array<{ mediaType: string; url: string; filename?: string }>;
+		webSearchEnabled?: boolean;
 		chatId?: string;
 		userId?: string;
 		userName?: string;
@@ -262,6 +264,8 @@ export class GatewayClient {
 
 	async chatStream(params: {
 		text: string;
+		files?: Array<{ mediaType: string; url: string; filename?: string }>;
+		webSearchEnabled?: boolean;
 		chatId?: string;
 		userId?: string;
 		userName?: string;

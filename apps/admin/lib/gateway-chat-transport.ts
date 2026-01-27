@@ -1,9 +1,11 @@
 "use client";
 
-import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
+import type { ChatTransport, FileUIPart, UIMessage, UIMessageChunk } from "ai";
 
 type StreamChat = (params: {
 	text: string;
+	files?: Array<{ mediaType: string; url: string; filename?: string }>;
+	webSearchEnabled?: boolean;
 	chatId?: string;
 	userId?: string;
 	userName?: string;
@@ -12,7 +14,7 @@ type StreamChat = (params: {
 
 type AbortChat = (streamId: string) => Promise<{ ok: boolean }>;
 
-function extractLastUserText<UI_MESSAGE extends UIMessage>(
+function extractLastUserPayload<UI_MESSAGE extends UIMessage>(
 	messages: UI_MESSAGE[],
 ) {
 	for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -22,9 +24,23 @@ function extractLastUserText<UI_MESSAGE extends UIMessage>(
 			.map((part) => (part.type === "text" ? part.text : ""))
 			.join("")
 			.trim();
-		if (text) return text;
+		const files = message.parts.filter(
+			(part): part is FileUIPart =>
+				part.type === "file" &&
+				typeof part.mediaType === "string" &&
+				part.mediaType.startsWith("image/"),
+		);
+		const metadata =
+			message.metadata && typeof message.metadata === "object"
+				? (message.metadata as { webSearchEnabled?: boolean })
+				: undefined;
+		const webSearchEnabled =
+			typeof metadata?.webSearchEnabled === "boolean"
+				? metadata.webSearchEnabled
+				: undefined;
+		if (text || files.length > 0) return { text, files, webSearchEnabled };
 	}
-	return "";
+	return { text: "", files: [], webSearchEnabled: undefined };
 }
 
 export class GatewayChatTransport<UI_MESSAGE extends UIMessage>
@@ -42,12 +58,14 @@ export class GatewayChatTransport<UI_MESSAGE extends UIMessage>
 	}: Parameters<ChatTransport<UI_MESSAGE>["sendMessages"]>[0]): Promise<
 		ReadableStream<UIMessageChunk>
 	> {
-		const text = extractLastUserText(messages);
-		if (!text) {
+		const { text, files, webSearchEnabled } = extractLastUserPayload(messages);
+		if (!text && files.length === 0) {
 			throw new Error("empty_message");
 		}
 		const { stream, streamId } = await this.streamChat({
 			text,
+			files,
+			webSearchEnabled,
 			chatId,
 		});
 		if (abortSignal) {

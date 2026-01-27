@@ -1,6 +1,6 @@
 "use client";
 
-import type { DataUIPart, UIMessage } from "ai";
+import type { DataUIPart, FileUIPart, UIMessage } from "ai";
 import { User } from "lucide-react";
 import { Icons } from "@/components/icons";
 import { Streamdown } from "streamdown";
@@ -12,7 +12,8 @@ export type ToolStatusData = {
 };
 
 export type AdminUIData = {
-	tools: ToolStatusData;
+	tools?: ToolStatusData;
+	webSearchEnabled?: boolean;
 };
 
 export type AdminUIMessage = UIMessage<AdminUIData>;
@@ -58,7 +59,16 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 					.map((part) => part.text)
 					.join("");
 				const toolParts = message.parts.filter(
-					(part): part is DataUIPart<AdminUIData> => part.type === "data-tools",
+					(
+						part,
+					): part is DataUIPart<AdminUIData> & { type: "data-tools" } =>
+						part.type === "data-tools",
+				);
+				const fileParts = message.parts.filter(
+					(part): part is FileUIPart =>
+						part.type === "file" &&
+						typeof part.mediaType === "string" &&
+						part.mediaType.startsWith("image/"),
 				);
 
 					return (
@@ -82,34 +92,46 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 							>
 								<div
 									className={cn(
-										"text-sm",
+										"flex flex-col gap-2 text-sm",
 										message.role === "user"
 											? "rounded-lg bg-primary text-primary-foreground px-3 py-2"
 											: "bg-transparent text-foreground px-0 py-0",
 									)}
 								>
-								{message.role === "assistant" ? (
-									<Streamdown className="whitespace-pre-wrap">
-										{text}
-									</Streamdown>
-								) : (
-									<div className="whitespace-pre-wrap">{text}</div>
-								)}
-								{toolParts.map((part, i) => {
-									const tools = Array.isArray(part.data.tools)
+									{fileParts.length > 0 ? (
+										<div className="flex flex-col gap-2">
+											{fileParts.map((part, index) => (
+												<img
+													key={`${message.id}-file-${index}`}
+													src={part.url}
+													alt={part.filename ?? `attachment-${index}`}
+													className="max-w-[260px] rounded-md border border-border/50"
+												/>
+											))}
+										</div>
+									) : null}
+									{message.role === "assistant" ? (
+										<Streamdown className="whitespace-pre-wrap">
+											{text}
+										</Streamdown>
+									) : (
+										<div className="whitespace-pre-wrap">{text}</div>
+									)}
+									{toolParts.map((part, i) => {
+									const tools = Array.isArray(part.data?.tools)
 										? part.data.tools.join(", ")
 										: "";
-									if (!tools) return null;
-									return (
-										<div
-											key={`${message.id}-tools-${i}`}
-											className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
-										>
-											Tools: {tools}
-										</div>
-									);
-								})}
-							</div>
+										if (!tools) return null;
+										return (
+											<div
+												key={`${message.id}-tools-${i}`}
+												className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
+											>
+												Tools: {tools}
+											</div>
+										);
+									})}
+								</div>
 						</div>
 					</div>
 				);

@@ -92,6 +92,8 @@ type GatewayContextValue = {
 	}) => Promise<unknown>;
 	sendChat: (params: {
 		text: string;
+		files?: Array<{ mediaType: string; url: string; filename?: string }>;
+		webSearchEnabled?: boolean;
 		chatId?: string;
 		userId?: string;
 		userName?: string;
@@ -99,6 +101,8 @@ type GatewayContextValue = {
 	}) => Promise<{ messages?: string[] }>;
 	streamChat: (params: {
 		text: string;
+		files?: Array<{ mediaType: string; url: string; filename?: string }>;
+		webSearchEnabled?: boolean;
 		chatId?: string;
 		userId?: string;
 		userName?: string;
@@ -197,6 +201,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 	const [configError, setConfigError] = useState<string | null>(null);
 	const clientRef = useRef<GatewayClient | null>(null);
 	const connectingRef = useRef<Promise<void> | null>(null);
+	const [autoConnect, setAutoConnect] = useState(false);
+	const autoConnectTriggered = useRef(false);
 
 	useEffect(() => {
 		const defaultBase = resolveDefaultBaseUrl(envBase);
@@ -204,6 +210,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 		if (saved) {
 			setBaseUrl(saved.baseUrl || defaultBase);
 			setToken(saved.token || "");
+			setAutoConnect(Boolean(saved.baseUrl));
 			return;
 		}
 		if (defaultBase) {
@@ -216,6 +223,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 			clientRef.current?.close();
 		};
 	}, []);
+
 
 	// Internal function that ensures we have a connected client, reusing existing connection
 	const ensureConnected = useCallback(async (): Promise<GatewayClient> => {
@@ -282,6 +290,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 			setLoading(false);
 		}
 	}, [baseUrl, ensureConnected]);
+
+	useEffect(() => {
+		if (!autoConnect || autoConnectTriggered.current) return;
+		if (!baseUrl) return;
+		autoConnectTriggered.current = true;
+		void connect();
+	}, [autoConnect, baseUrl, connect]);
 
 	const updateConfigField = useCallback((key: string, value: string) => {
 		setConfig((prev) => ({ ...prev, [key]: value }));
@@ -387,6 +402,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 	const sendChat = useCallback(
 		async (params: {
 			text: string;
+			files?: Array<{ mediaType: string; url: string; filename?: string }>;
+			webSearchEnabled?: boolean;
 			chatId?: string;
 			userId?: string;
 			userName?: string;
@@ -401,6 +418,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 	const streamChat = useCallback(
 		async (params: {
 			text: string;
+			files?: Array<{ mediaType: string; url: string; filename?: string }>;
+			webSearchEnabled?: boolean;
 			chatId?: string;
 			userId?: string;
 			userName?: string;
