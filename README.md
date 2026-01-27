@@ -91,6 +91,13 @@ npx wrangler deploy --config worker/wrangler.toml
 
 This first deploy creates the SQLite-backed Durable Object class for free plans.
 
+### Persona (SOUL.md)
+
+Global persona and tone live in [`apps/bot/config/SOUL.md`](apps/bot/config/SOUL.md).
+The Worker bundles this file at build time into
+[`apps/bot/config/soul.json`](apps/bot/config/soul.json) and injects it into every
+prompt. Per-channel overrides are available in the Admin "Channels" screen.
+
 5) Set Telegram webhook
 
 ```
