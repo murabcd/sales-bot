@@ -432,7 +432,7 @@ export function registerCommands(deps: CommandDeps) {
 			const result = await trackerCallTool(
 				tool,
 				mergedArgs,
-				skill.timeoutMs ?? 30_000,
+				skill.timeoutMs ?? 8_000,
 				ctx,
 			);
 			const text = formatToolResult(result);
@@ -583,7 +583,7 @@ export function registerCommands(deps: CommandDeps) {
 		}
 
 		try {
-			const result = await trackerCallTool(toolName, args, 30_000, ctx);
+			const result = await trackerCallTool(toolName, args, 8_000, ctx);
 			const text = formatToolResult(result);
 			if (text) {
 				await sendText(ctx, text);
