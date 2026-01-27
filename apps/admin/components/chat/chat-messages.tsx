@@ -1,11 +1,43 @@
 "use client";
 
-import type { DataUIPart, FileUIPart, UIMessage } from "ai";
-import { User } from "lucide-react";
-import { Icons } from "@/components/icons";
-import { Streamdown } from "streamdown";
+import type {
+	DataUIPart,
+	DynamicToolUIPart,
+	FileUIPart,
+	SourceDocumentUIPart,
+	ToolUIPart,
+	UIMessage,
+} from "ai";
+import { CopyIcon, ThumbsDownIcon, ThumbsUpIcon } from "lucide-react";
+import { useState } from "react";
+import {
+	Attachment,
+	AttachmentPreview,
+	Attachments,
+} from "@/components/ai-elements/attachments";
+import {
+	Source,
+	Sources,
+	SourcesContent,
+	SourcesTrigger,
+} from "@/components/ai-elements/sources";
+import {
+	Message,
+	MessageAction,
+	MessageActions,
+	MessageContent,
+	MessageResponse,
+	MessageToolbar,
+} from "@/components/ai-elements/messages";
+import {
+	Tool,
+	ToolContent,
+	ToolHeader,
+	ToolInput,
+	ToolOutput,
+} from "@/components/ai-elements/tool";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { cn } from "@/lib/utils";
+import { Icons } from "@/components/icons";
 
 export type ToolStatusData = {
 	tools: string[];
@@ -39,6 +71,13 @@ const EmptyState = (
 );
 
 export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
+	const [liked, setLiked] = useState<Record<string, boolean>>({});
+	const [disliked, setDisliked] = useState<Record<string, boolean>>({});
+
+	const handleCopy = (content: string) => {
+		navigator.clipboard.writeText(content);
+	};
+
 	const hasAssistantText = messages.some(
 		(message) =>
 			message.role === "assistant" &&
@@ -64,6 +103,35 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 					): part is DataUIPart<AdminUIData> & { type: "data-tools" } =>
 						part.type === "data-tools",
 				);
+				const toolCallParts = message.parts.filter(
+					(part): part is ToolUIPart | DynamicToolUIPart =>
+						part.type === "dynamic-tool" || part.type.startsWith("tool-"),
+				);
+				const sourceParts = message.parts.filter(
+					(part): part is SourceDocumentUIPart =>
+						part.type === "source-document",
+				);
+				const sources = sourceParts
+					.map((part, index) => {
+						const source = part as SourceDocumentUIPart & {
+							url?: unknown;
+							title?: unknown;
+							id?: unknown;
+						};
+						const href = typeof source.url === "string" ? source.url : "";
+						if (!href) return null;
+						const title =
+							typeof source.title === "string" && source.title.trim()
+								? source.title
+								: href;
+						const key =
+							typeof source.id === "string" ? source.id : `${href}-${index}`;
+						return { href, title, key };
+					})
+					.filter(
+						(source): source is { href: string; title: string; key: string } =>
+							Boolean(source),
+					);
 				const fileParts = message.parts.filter(
 					(part): part is FileUIPart =>
 						part.type === "file" &&
@@ -71,80 +139,160 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 						part.mediaType.startsWith("image/"),
 				);
 
-					return (
-						<div
-							key={message.id}
-							className={cn(
-								"flex gap-3",
-								message.role === "user" ? "flex-row-reverse" : "flex-row",
+				return (
+					<Message from={message.role} key={message.id}>
+						{fileParts.length > 0 ? (
+							<Attachments className="mb-2" variant="stacked">
+								{fileParts.map((part, index) => (
+									<Attachment
+										data={part}
+										key={`${message.id}-file-${index}`}
+									>
+										<AttachmentPreview />
+									</Attachment>
+								))}
+							</Attachments>
+						) : null}
+						<MessageContent>
+							{message.role === "assistant" ? (
+								<MessageResponse>{text}</MessageResponse>
+							) : (
+								<div className="whitespace-pre-wrap">{text}</div>
 							)}
-						>
-							{message.role === "assistant" && (
-								<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-									<Icons.sparkles className="size-4" />
-								</div>
-							)}
-							<div
-								className={cn(
-									"flex max-w-[80%] flex-col gap-1",
-									message.role === "user" ? "items-end" : "items-start",
-								)}
-							>
-								<div
-									className={cn(
-										"flex flex-col gap-2 text-sm",
-										message.role === "user"
-											? "rounded-lg bg-primary text-primary-foreground px-3 py-2"
-											: "bg-transparent text-foreground px-0 py-0",
-									)}
-								>
-									{fileParts.length > 0 ? (
-										<div className="flex flex-col gap-2">
-											{fileParts.map((part, index) => (
-												<img
-													key={`${message.id}-file-${index}`}
-													src={part.url}
-													alt={part.filename ?? `attachment-${index}`}
-													className="max-w-[260px] rounded-md border border-border/50"
-												/>
-											))}
-										</div>
-									) : null}
-									{message.role === "assistant" ? (
-										<Streamdown className="whitespace-pre-wrap">
-											{text}
-										</Streamdown>
-									) : (
-										<div className="whitespace-pre-wrap">{text}</div>
-									)}
-									{toolParts.map((part, i) => {
-									const tools = Array.isArray(part.data?.tools)
-										? part.data.tools.join(", ")
-										: "";
-										if (!tools) return null;
+							{toolParts.map((part, i) => {
+								const tools = Array.isArray(part.data?.tools)
+									? part.data.tools.join(", ")
+									: "";
+								if (!tools) return null;
+								return (
+									<div
+										key={`${message.id}-tools-${i}`}
+										className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
+									>
+										Tools: {tools}
+									</div>
+								);
+							})}
+							</MessageContent>
+							{toolCallParts.length > 0 && message.role === "assistant" ? (
+								<div className="space-y-2">
+									{toolCallParts.map((part, index) => {
+										const toolKey =
+											typeof part.toolCallId === "string"
+												? part.toolCallId
+												: `${message.id}-${index}`;
+										const toolTitle =
+											part.type === "dynamic-tool"
+												? part.toolName
+												: part.type.split("-").slice(1).join("-");
 										return (
-											<div
-												key={`${message.id}-tools-${i}`}
-												className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
-											>
-												Tools: {tools}
-											</div>
+										<Tool
+											defaultOpen={part.state !== "output-available"}
+											key={toolKey}
+										>
+											{part.type === "dynamic-tool" ? (
+												<ToolHeader
+													state={part.state}
+													title={toolTitle}
+													type="dynamic-tool"
+													toolName={part.toolName}
+												/>
+											) : (
+												<ToolHeader
+													state={part.state}
+													title={toolTitle}
+													type={part.type}
+												/>
+											)}
+											<ToolContent>
+												<ToolInput input={part.input ?? {}} />
+												<ToolOutput
+													errorText={part.errorText}
+													output={part.output as React.ReactNode}
+												/>
+											</ToolContent>
+										</Tool>
 										);
 									})}
 								</div>
-						</div>
-					</div>
+							) : null}
+							{sources.length > 0 && message.role === "assistant" ? (
+								<Sources>
+									<SourcesTrigger count={sources.length} />
+									<SourcesContent>
+										{sources.map((source) => (
+											<Source
+												href={source.href}
+												key={source.key ?? source.href}
+												title={source.title}
+											/>
+										))}
+									</SourcesContent>
+								</Sources>
+							) : null}
+							{message.role === "assistant" && text.trim().length > 0 ? (
+								<MessageToolbar>
+								<div className="flex items-center gap-2 text-xs text-muted-foreground">
+									<div className="flex size-7 items-center justify-center rounded-full bg-muted text-muted-foreground">
+										<Icons.sparkles className="size-3" />
+									</div>
+									Assistant
+								</div>
+								<MessageActions>
+									<MessageAction
+										label="Like"
+										onClick={() =>
+											setLiked((prev) => ({
+												...prev,
+												[message.id]: !prev[message.id],
+											}))
+										}
+										tooltip="Like this response"
+									>
+										<ThumbsUpIcon
+											className="size-4"
+											fill={liked[message.id] ? "currentColor" : "none"}
+										/>
+									</MessageAction>
+									<MessageAction
+										label="Dislike"
+										onClick={() =>
+											setDisliked((prev) => ({
+												...prev,
+												[message.id]: !prev[message.id],
+											}))
+										}
+										tooltip="Dislike this response"
+									>
+										<ThumbsDownIcon
+											className="size-4"
+											fill={disliked[message.id] ? "currentColor" : "none"}
+										/>
+									</MessageAction>
+									<MessageAction
+										label="Copy"
+										onClick={() => handleCopy(text)}
+										tooltip="Copy to clipboard"
+									>
+										<CopyIcon className="size-4" />
+									</MessageAction>
+								</MessageActions>
+							</MessageToolbar>
+						) : null}
+					</Message>
 				);
 			})}
 			{isLoading && !hasAssistantText && (
-				<div className="flex gap-3">
-					<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-						<Icons.sparkles className="size-4" />
-					</div>
-					<div className="text-sm text-muted-foreground">
-						<Shimmer>Thinking...</Shimmer>
-					</div>
-				</div>
+				<Message from="assistant">
+					<MessageContent>
+						<div className="flex items-center gap-2 text-sm text-muted-foreground">
+							<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+								<Icons.sparkles className="size-4" />
+							</div>
+							<Shimmer>Thinking...</Shimmer>
+						</div>
+					</MessageContent>
+				</Message>
 			)}
 		</div>
 	);

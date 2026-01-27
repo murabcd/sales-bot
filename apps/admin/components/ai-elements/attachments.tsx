@@ -2,6 +2,7 @@
 
 import type { FileUIPart } from "ai";
 import { XIcon } from "lucide-react";
+import Image from "next/image";
 import {
 	type ButtonHTMLAttributes,
 	createContext,
@@ -72,7 +73,7 @@ export const AttachmentPreview = ({ className }: { className?: string }) => {
 	const isImage = data.mediaType?.startsWith("image/");
 	if (!isImage) return null;
 	return (
-		<img
+		<Image
 			alt={data.filename ?? "attachment"}
 			className={cn("h-12 w-12 rounded-md object-cover", className)}
 			src={data.url}

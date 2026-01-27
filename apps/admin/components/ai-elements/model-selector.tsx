@@ -1,7 +1,7 @@
 "use client";
 
+import type { ComponentProps, PropsWithChildren } from "react";
 import {
-	Command,
 	CommandEmpty,
 	CommandGroup,
 	CommandInput,
@@ -14,7 +14,6 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import type { ComponentProps, PropsWithChildren } from "react";
 
 export type ModelSelectorProps = ComponentProps<typeof Popover>;
 
