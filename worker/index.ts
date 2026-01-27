@@ -78,11 +78,42 @@ function getUptimeSeconds() {
 async function getBot(env: Record<string, string | undefined>) {
 	if (!botPromise) {
 		botPromise = (async () => {
+			const cronClient = {
+				list: async (params?: { includeDisabled?: boolean }) => {
+					const response = await callCron(env as Env, "/list", params ?? {});
+					if (!response.ok) {
+						throw new Error("cron_list_failed");
+					}
+					return (await response.json()) as { jobs?: unknown[] };
+				},
+				add: async (params: Record<string, unknown>) => {
+					const response = await callCron(env as Env, "/add", params);
+					if (!response.ok) {
+						throw new Error("cron_add_failed");
+					}
+					return response.json();
+				},
+				remove: async (params: { jobId: string }) => {
+					const response = await callCron(env as Env, "/remove", params);
+					if (!response.ok) {
+						throw new Error("cron_remove_failed");
+					}
+					return response.json();
+				},
+				run: async (params: { jobId: string; mode?: "due" | "force" }) => {
+					const response = await callCron(env as Env, "/run", params);
+					if (!response.ok) {
+						throw new Error("cron_run_failed");
+					}
+					return response.json();
+				},
+			};
 			const runtime = await createBot({
 				env,
 				modelsConfig,
 				runtimeSkills,
 				getUptimeSeconds,
+				cronClient,
 			});
 			await runtime.bot.init();
 			return runtime;

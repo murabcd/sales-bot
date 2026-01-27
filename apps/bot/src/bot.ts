@@ -124,6 +124,17 @@ export type CreateBotOptions = {
 	runtimeSkills?: RuntimeSkill[];
 	getUptimeSeconds?: () => number;
 	onDebugLog?: (line: string) => void;
+	cronClient?: {
+		list: (params?: {
+			includeDisabled?: boolean;
+		}) => Promise<{ jobs?: unknown[] }>;
+		add: (params: Record<string, unknown>) => Promise<unknown>;
+		remove: (params: { jobId: string }) => Promise<unknown>;
+		run: (params: {
+			jobId: string;
+			mode?: "due" | "force";
+		}) => Promise<unknown>;
+	};
 };
 
 export async function createBot(options: CreateBotOptions) {
@@ -143,6 +154,7 @@ export async function createBot(options: CreateBotOptions) {
 	const OPENAI_API_KEY = env.OPENAI_API_KEY;
 	const OPENAI_MODEL = env.OPENAI_MODEL ?? "";
 	const ALLOWED_TG_IDS = env.ALLOWED_TG_IDS ?? "";
+	const CRON_STATUS_TIMEZONE = env.CRON_STATUS_TIMEZONE ?? "UTC";
 	const DEFAULT_TRACKER_QUEUE = env.DEFAULT_TRACKER_QUEUE ?? "PROJ";
 	const DEFAULT_ISSUE_PREFIX =
 		env.DEFAULT_ISSUE_PREFIX ?? DEFAULT_TRACKER_QUEUE;
@@ -335,21 +347,6 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	const runtimeSkills = options.runtimeSkills ?? [];
-	const SUPPORTED_TRACKER_TOOLS = new Set([
-		"issues_find",
-		"issue_get",
-		"issue_get_comments",
-		"issue_get_url",
-	]);
-	const filteredRuntimeSkills = runtimeSkills.filter((skill) => {
-		const { server, tool } = resolveToolRef(skill.tool);
-		return server === "yandex-tracker" && SUPPORTED_TRACKER_TOOLS.has(tool);
-	});
-	if (filteredRuntimeSkills.length !== runtimeSkills.length) {
-		console.warn(
-			`[skills] Filtered runtime skills: ${filteredRuntimeSkills.length}/${runtimeSkills.length} supported.`,
-		);
-	}
 
 	const toolConflictLogger = (event: {
 		event: "tool_conflict";
@@ -390,6 +387,37 @@ export async function createBot(options: CreateBotOptions) {
 			},
 			agentTools,
 		);
+
+		if (options.cronClient) {
+			register(
+				{
+					name: "cron_schedule",
+					description:
+						"Schedule a recurring report or reminder and deliver it to the current chat.",
+					source: "cron",
+					origin: "core",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "cron_list",
+					description: "List scheduled cron jobs.",
+					source: "cron",
+					origin: "core",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "cron_remove",
+					description: "Remove a scheduled cron job by id or name.",
+					source: "cron",
+					origin: "core",
+				},
+				agentTools,
+			);
+		}
 
 		if (WEB_SEARCH_ENABLED) {
 			register(
@@ -1142,6 +1170,200 @@ export async function createBot(options: CreateBotOptions) {
 				},
 			}),
 		);
+
+		if (cronClient) {
+			registerTool(
+				{
+					name: "cron_schedule",
+					description:
+						"Schedule a recurring report or reminder and deliver it to the current chat.",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description:
+						"Create a recurring cron job that runs a prompt and sends the result to Telegram.",
+					inputSchema: z.object({
+						goal: z.string().describe("What should the report/reminder do?"),
+						prompt: z
+							.string()
+							.optional()
+							.describe("Optional custom prompt for the agent."),
+						schedule: z.object({
+							cadence: z
+								.enum(["daily", "weekdays", "weekly", "every"])
+								.optional(),
+							time: z.string().optional().describe("Time in HH:MM (24h)."),
+							timezone: z.string().optional().describe("IANA timezone."),
+							dayOfWeek: z
+								.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
+								.optional()
+								.describe("Required for weekly cadence."),
+							everyMinutes: z
+								.number()
+								.int()
+								.positive()
+								.optional()
+								.describe("Required for every cadence."),
+						}),
+						deliverToChatId: z
+							.string()
+							.optional()
+							.describe("Telegram chat id to deliver to."),
+					}),
+					execute: async (input) => {
+						const chatId =
+							input.deliverToChatId ?? options?.ctx?.chat?.id?.toString() ?? "";
+						if (!chatId) {
+							return {
+								ok: false,
+								message: "Missing chat id. Ask the user where to deliver.",
+							};
+						}
+						const cadence = input.schedule.cadence ?? "daily";
+						const timezone =
+							input.schedule.timezone?.trim() || CRON_STATUS_TIMEZONE;
+						let schedule: Record<string, unknown> | null = null;
+						if (cadence === "every") {
+							const everyMinutes = input.schedule.everyMinutes;
+							if (!everyMinutes) {
+								return {
+									ok: false,
+									message:
+										"Need interval minutes for every cadence (e.g. every 60 minutes).",
+								};
+							}
+							schedule = {
+								kind: "every",
+								everyMs: Math.max(1, everyMinutes) * 60_000,
+							};
+						} else {
+							const time = input.schedule.time
+								? parseTime(input.schedule.time)
+								: null;
+							if (!time) {
+								return {
+									ok: false,
+									message: "Need time in HH:MM (e.g. 11:00).",
+								};
+							}
+							let expr = "";
+							if (cadence === "weekdays") {
+								expr = buildCronExpr(time, true);
+							} else if (cadence === "weekly") {
+								const day = input.schedule.dayOfWeek;
+								if (!day) {
+									return {
+										ok: false,
+										message: "Need dayOfWeek for weekly cadence (mon/tue/...).",
+									};
+								}
+								const dayMap: Record<string, string> = {
+									mon: "1",
+									tue: "2",
+									wed: "3",
+									thu: "4",
+									fri: "5",
+									sat: "6",
+									sun: "0",
+								};
+								expr = `${time.minute} ${time.hour} * * ${dayMap[day] ?? "*"}`;
+							} else {
+								expr = buildCronExpr(time, false);
+							}
+							schedule = { kind: "cron", expr, tz: timezone };
+						}
+
+						const goal = input.goal.trim();
+						const prompt =
+							input.prompt?.trim() ||
+							`Prepare a concise report: ${goal}. Include key numbers and a short insight.`;
+						const job = {
+							name: goal.slice(0, 80),
+							description: goal,
+							enabled: true,
+							schedule,
+							sessionTarget: "main",
+							wakeMode: "next-heartbeat",
+							payload: {
+								kind: "agentTurn",
+								message: prompt,
+								deliver: true,
+								channel: "telegram",
+								to: chatId,
+							},
+						};
+						const created = await cronClient.add(job);
+						return {
+							ok: true,
+							message: `Scheduled: ${formatCronJob(created)}`,
+							job: created,
+						};
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "cron_list",
+					description: "List scheduled cron jobs.",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description: "List scheduled cron jobs.",
+					inputSchema: z.object({
+						includeDisabled: z.boolean().optional(),
+					}),
+					execute: async ({ includeDisabled }) => {
+						const payload = await cronClient.list({
+							includeDisabled: includeDisabled !== false,
+						});
+						const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+						return {
+							ok: true,
+							jobs,
+							message:
+								jobs.length === 0
+									? "No cron jobs."
+									: jobs.map((job) => formatCronJob(job)),
+						};
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "cron_remove",
+					description: "Remove a scheduled cron job by id or name.",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description: "Remove a scheduled cron job by id or name.",
+					inputSchema: z.object({
+						target: z.string().describe("Job id or name."),
+					}),
+					execute: async ({ target }) => {
+						const payload = await cronClient.list({ includeDisabled: true });
+						const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+						const matches = findCronJob(jobs, target);
+						if (matches.length === 0) {
+							return { ok: false, message: `No job found for ${target}.` };
+						}
+						if (matches.length > 1) {
+							return {
+								ok: false,
+								message: "Multiple matches found. Please specify a job id.",
+							};
+						}
+						const jobId = (matches[0] as { id?: string }).id ?? target;
+						await cronClient.remove({ jobId });
+						return { ok: true, message: `Removed ${jobId}.` };
+					},
+				}),
+			);
+		}
 
 		if (JIRA_BASE_URL && JIRA_EMAIL && JIRA_API_TOKEN) {
 			registerTool(
@@ -2541,6 +2763,8 @@ export async function createBot(options: CreateBotOptions) {
 		return `${secs}s`;
 	}
 
+	const cronClient = options.cronClient;
+
 	const startKeyboard = new InlineKeyboard()
 		.text("Помощь", "cmd:help")
 		.text("Статус", "cmd:status");
@@ -2768,7 +2992,7 @@ export async function createBot(options: CreateBotOptions) {
 			channelConfig: ctx.state.channelConfig,
 		});
 		const channelSupported = filterSkillsForChannel({
-			skills: filteredRuntimeSkills,
+			skills: runtimeSkills,
 			channelConfig: ctx.state.channelConfig,
 		});
 		if (!channelSkills.length) {
@@ -2806,7 +3030,7 @@ export async function createBot(options: CreateBotOptions) {
 			return;
 		}
 		const channelSupported = filterSkillsForChannel({
-			skills: filteredRuntimeSkills,
+			skills: runtimeSkills,
 			channelConfig: ctx.state.channelConfig,
 		});
 		const skill = channelSupported.find((item) => item.name === skillName);
@@ -2895,6 +3119,85 @@ export async function createBot(options: CreateBotOptions) {
 		return sendText(ctx, "Я Omni, ассистент по Yandex Tracker.");
 	});
 
+	function formatCronSchedule(schedule: unknown) {
+		if (!schedule || typeof schedule !== "object") return "unknown";
+		const kind = (schedule as { kind?: string }).kind ?? "unknown";
+		if (kind === "interval") {
+			const value = (schedule as { value?: number }).value ?? "?";
+			const unit = (schedule as { unit?: string }).unit ?? "interval";
+			return `every ${value} ${unit}`;
+		}
+		if (kind === "every") {
+			const everyMs = (schedule as { everyMs?: number }).everyMs ?? 0;
+			const minutes = Math.max(1, Math.round(everyMs / 60000));
+			return `every ${minutes} min`;
+		}
+		if (kind === "cron") {
+			const expr = (schedule as { expr?: string }).expr ?? "cron";
+			const tz = (schedule as { tz?: string }).tz;
+			return tz ? `${expr} (${tz})` : expr;
+		}
+		if (kind === "none") return "manual";
+		return kind;
+	}
+
+	function parseTime(value: string) {
+		const match = /^([01]?\\d|2[0-3]):([0-5]\\d)$/.exec(value.trim());
+		if (!match) return null;
+		const hour = Number.parseInt(match[1] ?? "0", 10);
+		const minute = Number.parseInt(match[2] ?? "0", 10);
+		return { hour, minute };
+	}
+
+	function buildCronExpr(
+		time: { hour: number; minute: number },
+		weekdays: boolean,
+	) {
+		const dow = weekdays ? "1-5" : "*";
+		return `${time.minute} ${time.hour} * * ${dow}`;
+	}
+
+	function formatCronJob(job: unknown) {
+		if (!job || typeof job !== "object") return "unknown job";
+		const record = job as {
+			id?: string;
+			name?: string;
+			enabled?: boolean;
+			schedule?: unknown;
+			payload?: { kind?: string };
+			state?: {
+				nextRunAtMs?: number;
+				lastRunAtMs?: number;
+				lastStatus?: string;
+			};
+		};
+		const enabled = record.enabled === false ? "off" : "on";
+		const schedule = formatCronSchedule(record.schedule);
+		const payload = record.payload?.kind ?? "unknown";
+		const nextRun =
+			typeof record.state?.nextRunAtMs === "number"
+				? new Date(record.state.nextRunAtMs).toISOString()
+				: "n/a";
+		const lastRun =
+			typeof record.state?.lastRunAtMs === "number"
+				? new Date(record.state.lastRunAtMs).toISOString()
+				: "n/a";
+		const lastStatus = record.state?.lastStatus ?? "n/a";
+		return `${record.id ?? "unknown"} | ${enabled} | ${record.name ?? "Untitled"} | ${schedule} | ${payload} | next ${nextRun} | last ${lastStatus} ${lastRun}`;
+	}
+
+	function findCronJob(jobs: unknown[], target: string) {
+		const needle = target.trim().toLowerCase();
+		const matches = jobs.filter((job) => {
+			if (!job || typeof job !== "object") return false;
+			const record = job as { id?: string; name?: string };
+			const id = record.id?.toLowerCase() ?? "";
+			const name = record.name?.toLowerCase() ?? "";
+			return id === needle || id.startsWith(needle) || name === needle;
+		});
+		return matches;
+	}
+
 	async function safeAnswerCallback(ctx: {
 		answerCallbackQuery: () => Promise<unknown>;
 	}) {
@@ -2941,6 +3244,12 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("tracker", async (ctx) => {
 		setLogContext(ctx, { command: "/tracker", message_type: "command" });
+		const SUPPORTED_TRACKER_TOOLS = new Set([
+			"issues_find",
+			"issue_get",
+			"issue_get_comments",
+			"issue_get_url",
+		]);
 		if (
 			isGroupChat(ctx) &&
 			shouldRequireMentionForChannel({

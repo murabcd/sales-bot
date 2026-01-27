@@ -1,5 +1,6 @@
 export type ToolSource =
 	| "core"
+	| "cron"
 	| "web"
 	| "memory"
 	| "tracker"
