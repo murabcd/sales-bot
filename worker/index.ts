@@ -12,27 +12,26 @@ import runtimeSkills from "../apps/bot/config/runtime-skills.json";
 import { createBot } from "../apps/bot/src/bot.js";
 import { authorizeAdminRequest } from "../apps/bot/src/lib/gateway/admin-auth.js";
 import {
-	type GatewayConfig,
 	applyGatewayConfig,
 	buildGatewayConfigSnapshot,
+	type GatewayConfig,
 	sanitizeGatewayConfig,
 } from "../apps/bot/src/lib/gateway/config.js";
-import {
-	authorizeGatewayToken,
-	buildAdminStatusPayload,
-	parseList,
-} from "./lib/gateway.js";
-import {
-	SKILLS_CONFIG_KEY,
-	buildSkillsStatusReport,
-	parseSkillsConfig,
-	serializeSkillsConfig,
-} from "./lib/skills.js";
 import { allowTelegramUpdate } from "../apps/bot/src/lib/gateway/telegram-allowlist.js";
 import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
 import { markdownToTelegramHtmlChunks } from "../apps/bot/src/lib/telegram/format.js";
-import { CronDO } from "./cron-do.js";
 import { ChannelsDO } from "./channels-do.js";
+import { CronDO } from "./cron-do.js";
+import {
+	authorizeGatewayToken,
+	buildAdminStatusPayload,
+} from "./lib/gateway.js";
+import {
+	buildSkillsStatusReport,
+	parseSkillsConfig,
+	SKILLS_CONFIG_KEY,
+	serializeSkillsConfig,
+} from "./lib/skills.js";
 import { SessionsDO } from "./sessions-do.js";
 
 const startTime = Date.now();
@@ -153,7 +152,11 @@ async function callSessions(
 	);
 }
 
-async function callCron(env: Env, path: string, params: Record<string, unknown>) {
+async function callCron(
+	env: Env,
+	path: string,
+	params: Record<string, unknown>,
+) {
 	const stub = getCronStub(env);
 	return withTimeout(
 		stub.fetch(`https://do${path}`, {
@@ -181,7 +184,10 @@ async function callChannels(
 	);
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+async function withTimeout<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	const timeout = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => {
@@ -205,11 +211,25 @@ function mapTelegramKind(kind?: string) {
 function resolveTelegramSession(update: Update) {
 	const payload = (update as Update & Record<string, unknown>) ?? {};
 	const message =
-		(payload.message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.edited_message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.edited_channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.callback_query as { message?: { chat?: { id?: number; type?: string; title?: string } } } | undefined)?.message ??
+		(payload.message as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(payload.edited_message as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(payload.channel_post as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(payload.edited_channel_post as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(
+			payload.callback_query as
+				| {
+						message?: { chat?: { id?: number; type?: string; title?: string } };
+				  }
+				| undefined
+		)?.message ??
 		undefined;
 	const chat = message?.chat;
 	if (!chat?.id) return null;
@@ -228,11 +248,25 @@ function resolveTelegramSession(update: Update) {
 function resolveTelegramChannel(update: Update) {
 	const payload = (update as Update & Record<string, unknown>) ?? {};
 	const message =
-		(payload.message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.edited_message as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.edited_channel_post as { chat?: { id?: number; type?: string; title?: string } } | undefined) ??
-		(payload.callback_query as { message?: { chat?: { id?: number; type?: string; title?: string } } } | undefined)?.message ??
+		(payload.message as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(payload.edited_message as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(payload.channel_post as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(payload.edited_channel_post as
+			| { chat?: { id?: number; type?: string; title?: string } }
+			| undefined) ??
+		(
+			payload.callback_query as
+				| {
+						message?: { chat?: { id?: number; type?: string; title?: string } };
+				  }
+				| undefined
+		)?.message ??
 		undefined;
 	const chat = message?.chat;
 	if (!chat?.id) return null;
@@ -255,8 +289,14 @@ function resolveTelegramThreadId(update: Update) {
 		(payload.message as { message_thread_id?: number } | undefined) ??
 		(payload.edited_message as { message_thread_id?: number } | undefined) ??
 		(payload.channel_post as { message_thread_id?: number } | undefined) ??
-		(payload.edited_channel_post as { message_thread_id?: number } | undefined) ??
-		(payload.callback_query as { message?: { message_thread_id?: number } } | undefined)?.message ??
+		(payload.edited_channel_post as
+			| { message_thread_id?: number }
+			| undefined) ??
+		(
+			payload.callback_query as
+				| { message?: { message_thread_id?: number } }
+				| undefined
+		)?.message ??
 		undefined;
 	const threadId = message?.message_thread_id;
 	return typeof threadId === "number" ? threadId : undefined;
@@ -353,7 +393,6 @@ async function touchAdminSession(params: {
 	});
 }
 
-
 function extractClientIp(request: WorkerRequest) {
 	return (
 		request.headers.get("cf-connecting-ip") ??
@@ -401,7 +440,6 @@ export default {
 		_ctx: ExecutionContext,
 	): Promise<WorkerResponse> {
 		const url = new URL(request.url);
-		const startMs = Date.now();
 		if (url.pathname === "/gateway" && isWebSocketUpgrade(request)) {
 			return handleGatewayWebSocket(request, env);
 		}
@@ -411,7 +449,7 @@ export default {
 				? "telegram"
 				: "other";
 		const config = await readGatewayConfig(env);
-		const effectiveEnv = applyGatewayConfig(env, config);
+		const effectiveEnv = applyGatewayConfig(env, config) as Env;
 
 		if (route === "admin") {
 			if (request.method === "OPTIONS") {
@@ -429,12 +467,8 @@ export default {
 					),
 				);
 			}
-			try {
-				const response = await handleAdminRequest(request, effectiveEnv);
-				return toWorkerResponse(response);
-			} catch (error) {
-				throw error;
-			}
+			const response = await handleAdminRequest(request, effectiveEnv);
+			return toWorkerResponse(response);
 		}
 		if (url.pathname !== "/telegram") {
 			return toWorkerResponse(new Response("Not found", { status: 404 }));
@@ -458,19 +492,14 @@ export default {
 			);
 			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
-		const telegramRequest = request as unknown as Request;
 		const id = env.UPDATES_DO.idFromName("telegram-updates");
 		const stub = env.UPDATES_DO.get(id);
-		try {
-			await stub.fetch("https://do/enqueue", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(update),
-			});
-			return toWorkerResponse(new Response("OK", { status: 200 }));
-		} catch (error) {
-			throw error;
-		}
+		await stub.fetch("https://do/enqueue", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(update),
+		});
+		return toWorkerResponse(new Response("OK", { status: 200 }));
 	},
 };
 
@@ -605,6 +634,7 @@ export class TelegramUpdatesDO implements DurableObject {
 		const updateId =
 			typeof update.update_id === "number" ? String(update.update_id) : null;
 		const state = await this.loadState();
+		let startedAt: number | null = null;
 		if (updateId) {
 			if (state.processedIds.includes(updateId)) return true;
 			if (state.queue.some((item) => item.id === updateId)) return true;
@@ -618,8 +648,19 @@ export class TelegramUpdatesDO implements DurableObject {
 				(update as Update & { __channelConfig?: unknown }).__channelConfig =
 					channel.config;
 			}
+			startedAt = Date.now();
+			logBotInvocation("bot_invocation_start", update, {
+				route: "callback_fastpath",
+				stream: false,
+			});
 			await runtime.bot.handleUpdate(update);
 			await touchTelegramSession(this.env, update);
+			logBotInvocation("bot_invocation_end", update, {
+				route: "callback_fastpath",
+				stream: false,
+				status: "ok",
+				elapsed_ms: startedAt ? Date.now() - startedAt : null,
+			});
 			if (updateId) {
 				state.processedIds.push(updateId);
 				if (state.processedIds.length > PROCESSED_IDS_MAX) {
@@ -631,6 +672,13 @@ export class TelegramUpdatesDO implements DurableObject {
 			}
 			return true;
 		} catch (error) {
+			logBotInvocation("bot_invocation_end", update, {
+				route: "callback_fastpath",
+				stream: false,
+				status: "error",
+				error: String(error),
+				elapsed_ms: startedAt ? Date.now() - startedAt : null,
+			});
 			console.error("telegram_update_error", error);
 			return false;
 		}
@@ -653,6 +701,7 @@ export class TelegramUpdatesDO implements DurableObject {
 				}
 
 				state.queue.shift();
+				let startedAt: number | null = null;
 				try {
 					const channel = await touchTelegramChannel(this.env, item.update);
 					if (!channel.enabled) {
@@ -663,15 +712,34 @@ export class TelegramUpdatesDO implements DurableObject {
 							);
 						}
 						await this.saveState(state);
+						logBotInvocation("bot_invocation_end", item.update, {
+							route: "processed",
+							stream: false,
+							status: "skipped",
+							reason: "channel_disabled",
+							elapsed_ms: 0,
+						});
 						logUpdateHandled("processed", item.update);
 						continue;
 					}
 					if (channel.config) {
-						(item.update as Update & { __channelConfig?: unknown }).__channelConfig =
-							channel.config;
+						(
+							item.update as Update & { __channelConfig?: unknown }
+						).__channelConfig = channel.config;
 					}
+					startedAt = Date.now();
+					logBotInvocation("bot_invocation_start", item.update, {
+						route: "processed",
+						stream: false,
+					});
 					await runtime.bot.handleUpdate(item.update);
 					await touchTelegramSession(this.env, item.update);
+					logBotInvocation("bot_invocation_end", item.update, {
+						route: "processed",
+						stream: false,
+						status: "ok",
+						elapsed_ms: startedAt ? Date.now() - startedAt : null,
+					});
 					state.processedIds.push(item.id);
 					if (state.processedIds.length > PROCESSED_IDS_MAX) {
 						state.processedIds = state.processedIds.slice(
@@ -681,6 +749,13 @@ export class TelegramUpdatesDO implements DurableObject {
 					await this.saveState(state);
 					logUpdateHandled("processed", item.update);
 				} catch (error) {
+					logBotInvocation("bot_invocation_end", item.update, {
+						route: "processed",
+						stream: false,
+						status: "error",
+						error: String(error),
+						elapsed_ms: startedAt ? Date.now() - startedAt : null,
+					});
 					console.error("telegram_update_error", error);
 					item.attempt += 1;
 					if (item.attempt >= MAX_ATTEMPTS) {
@@ -735,6 +810,43 @@ function logUpdateHandled(
 	);
 }
 
+function logBotInvocation(
+	event: "bot_invocation_start" | "bot_invocation_end",
+	update: Update,
+	extra: Record<string, unknown>,
+) {
+	const updateId =
+		typeof update.update_id === "number" ? update.update_id : null;
+	const message = "message" in update ? update.message : null;
+	const callbackMessage =
+		"callback_query" in update && update.callback_query
+			? update.callback_query.message
+			: null;
+	const chatId =
+		message?.chat?.id ??
+		(callbackMessage && "chat" in callbackMessage
+			? callbackMessage.chat?.id
+			: null) ??
+		null;
+	const userId =
+		message?.from?.id ??
+		(callbackMessage && "from" in callbackMessage
+			? callbackMessage.from?.id
+			: null) ??
+		null;
+	const updateType = "callback_query" in update ? "callback_query" : "message";
+	console.log(
+		JSON.stringify({
+			event,
+			update_id: updateId,
+			update_type: updateType,
+			chat_id: chatId ?? null,
+			user_id: userId ?? null,
+			...extra,
+		}),
+	);
+}
+
 function isTelegramUpdate(update: unknown): update is Update {
 	if (!update || typeof update !== "object") return false;
 	return (
@@ -776,7 +888,11 @@ async function handleAdminRequest(request: WorkerRequest, env: Env) {
 			const reportParts = await buildDailyStatusReportParts({ env });
 			const chatId = env.CRON_STATUS_CHAT_ID?.trim();
 			if (chatId && env.BOT_TOKEN) {
-				await sendDailyStatusMessages(env.BOT_TOKEN as string, chatId, reportParts);
+				await sendDailyStatusMessages(
+					env.BOT_TOKEN as string,
+					chatId,
+					reportParts,
+				);
 			}
 			return withCors(
 				new Response(
@@ -790,10 +906,10 @@ async function handleAdminRequest(request: WorkerRequest, env: Env) {
 		} catch (error) {
 			console.error("cron_admin_run_error", error);
 			return withCors(
-				new Response(
-					JSON.stringify({ ok: false, error: String(error) }),
-					{ status: 500, headers: { "Content-Type": "application/json" } },
-				),
+				new Response(JSON.stringify({ ok: false, error: String(error) }), {
+					status: 500,
+					headers: { "Content-Type": "application/json" },
+				}),
 			);
 		}
 	}
@@ -808,7 +924,23 @@ function toGatewayError(message: string) {
 	return { message };
 }
 
-function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerResponse {
+type ServerWebSocket = WebSocket & {
+	accept: () => void;
+};
+
+type WebSocketPair = {
+	0: WebSocket;
+	1: ServerWebSocket;
+};
+
+declare const WebSocketPair: {
+	new (): WebSocketPair;
+};
+
+function handleGatewayWebSocket(
+	request: WorkerRequest,
+	env: Env,
+): WorkerResponse {
 	const pair = new WebSocketPair();
 	const client = pair[0];
 	const server = pair[1];
@@ -1034,7 +1166,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			try {
 				const response = await callChannels(env, "/list", params ?? {});
 				if (!response.ok) {
-					sendResponse(id, false, undefined, toGatewayError("channels_list_failed"));
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("channels_list_failed"),
+					);
 					return;
 				}
 				sendResponse(id, true, await response.json());
@@ -1048,7 +1185,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			try {
 				const response = await callChannels(env, "/patch", params ?? {});
 				if (!response.ok) {
-					sendResponse(id, false, undefined, toGatewayError("channels_patch_failed"));
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("channels_patch_failed"),
+					);
 					return;
 				}
 				sendResponse(id, true, await response.json());
@@ -1076,7 +1218,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			try {
 				const response = await callCron(env, "/status", params ?? {});
 				if (!response.ok) {
-					sendResponse(id, false, undefined, toGatewayError("cron_status_failed"));
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("cron_status_failed"),
+					);
 					return;
 				}
 				sendResponse(id, true, await response.json());
@@ -1090,7 +1237,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			try {
 				const response = await callCron(env, "/list", params ?? {});
 				if (!response.ok) {
-					sendResponse(id, false, undefined, toGatewayError("cron_list_failed"));
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("cron_list_failed"),
+					);
 					return;
 				}
 				sendResponse(id, true, await response.json());
@@ -1118,7 +1270,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			try {
 				const response = await callCron(env, "/update", params ?? {});
 				if (!response.ok) {
-					sendResponse(id, false, undefined, toGatewayError("cron_update_failed"));
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("cron_update_failed"),
+					);
 					return;
 				}
 				sendResponse(id, true, await response.json());
@@ -1132,7 +1289,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			try {
 				const response = await callCron(env, "/remove", params ?? {});
 				if (!response.ok) {
-					sendResponse(id, false, undefined, toGatewayError("cron_remove_failed"));
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("cron_remove_failed"),
+					);
 					return;
 				}
 				sendResponse(id, true, await response.json());
@@ -1160,7 +1322,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			try {
 				const response = await callCron(env, "/runs", params ?? {});
 				if (!response.ok) {
-					sendResponse(id, false, undefined, toGatewayError("cron_runs_failed"));
+					sendResponse(
+						id,
+						false,
+						undefined,
+						toGatewayError("cron_runs_failed"),
+					);
 					return;
 				}
 				sendResponse(id, true, await response.json());
@@ -1207,8 +1374,7 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 				for (const [key, value] of Object.entries(envPatch)) {
 					const trimmedKey = key.trim();
 					if (!trimmedKey) continue;
-					const trimmedValue =
-						typeof value === "string" ? value.trim() : "";
+					const trimmedValue = typeof value === "string" ? value.trim() : "";
 					if (!trimmedValue) delete nextEnv[trimmedKey];
 					else nextEnv[trimmedKey] = trimmedValue;
 				}
@@ -1225,7 +1391,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 		}
 
 		if (method === "skills.install") {
-			sendResponse(id, false, undefined, toGatewayError("install_not_supported"));
+			sendResponse(
+				id,
+				false,
+				undefined,
+				toGatewayError("install_not_supported"),
+			);
 			return;
 		}
 
@@ -1233,7 +1404,9 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			const text = typeof params?.text === "string" ? params.text.trim() : "";
 			const files = Array.isArray(params?.files)
 				? params.files.filter(
-						(file): file is { mediaType: string; url: string; filename?: string } =>
+						(
+							file,
+						): file is { mediaType: string; url: string; filename?: string } =>
 							typeof file === "object" &&
 							file !== null &&
 							typeof (file as { mediaType?: unknown }).mediaType === "string" &&
@@ -1268,7 +1441,20 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 					: "private";
 			const stream = params?.stream === true;
 			if (!stream) {
+				let startedAt: number | null = null;
 				try {
+					startedAt = Date.now();
+					console.log(
+						JSON.stringify({
+							event: "bot_invocation_start",
+							chat_id: chatId,
+							user_id: userId,
+							chat_type: chatType,
+							has_files: files.length > 0,
+							web_search_enabled: webSearchEnabled ?? null,
+							stream: false,
+						}),
+					);
 					const runtime = await getBot(env);
 					const result = await runtime.runLocalChat({
 						text,
@@ -1280,8 +1466,31 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 						chatType,
 					});
 					await touchAdminSession({ env, chatId, chatType, userName });
+					console.log(
+						JSON.stringify({
+							event: "bot_invocation_end",
+							chat_id: chatId,
+							user_id: userId,
+							chat_type: chatType,
+							stream: false,
+							status: "ok",
+							elapsed_ms: startedAt ? Date.now() - startedAt : null,
+						}),
+					);
 					sendResponse(id, true, { messages: result.messages });
 				} catch (error) {
+					console.log(
+						JSON.stringify({
+							event: "bot_invocation_end",
+							chat_id: chatId,
+							user_id: userId,
+							chat_type: chatType,
+							stream: false,
+							status: "error",
+							error: String(error),
+							elapsed_ms: startedAt ? Date.now() - startedAt : null,
+						}),
+					);
 					sendResponse(id, false, undefined, toGatewayError(String(error)));
 				}
 				return;
@@ -1293,7 +1502,21 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			);
 			sendResponse(id, true, { streamId });
 			void (async () => {
+				let startedAt: number | null = null;
 				try {
+					startedAt = Date.now();
+					console.log(
+						JSON.stringify({
+							event: "bot_invocation_start",
+							chat_id: chatId,
+							user_id: userId,
+							chat_type: chatType,
+							has_files: files.length > 0,
+							web_search_enabled: webSearchEnabled ?? null,
+							stream: true,
+							stream_id: streamId,
+						}),
+					);
 					const runtime = await getBot(env);
 					const result = await runtime.runLocalChatStream(
 						{
@@ -1316,8 +1539,33 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 						}
 					}
 					await touchAdminSession({ env, chatId, chatType, userName });
+					console.log(
+						JSON.stringify({
+							event: "bot_invocation_end",
+							chat_id: chatId,
+							user_id: userId,
+							chat_type: chatType,
+							stream: true,
+							stream_id: streamId,
+							status: "ok",
+							elapsed_ms: startedAt ? Date.now() - startedAt : null,
+						}),
+					);
 					sendEvent(streamId, { done: true });
 				} catch (error) {
+					console.log(
+						JSON.stringify({
+							event: "bot_invocation_end",
+							chat_id: chatId,
+							user_id: userId,
+							chat_type: chatType,
+							stream: true,
+							stream_id: streamId,
+							status: "error",
+							error: String(error),
+							elapsed_ms: startedAt ? Date.now() - startedAt : null,
+						}),
+					);
 					sendEvent(streamId, {
 						chunk: { type: "error", errorText: String(error) },
 					});
@@ -1350,10 +1598,12 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 		sendResponse(id, false, undefined, toGatewayError("unknown_method"));
 	});
 
-	return new Response(null, {
-		status: 101,
-		webSocket: client,
-	});
+	return toWorkerResponse(
+		new Response(null, {
+			status: 101,
+			webSocket: client,
+		} as ResponseInit & { webSocket: WebSocket }),
+	);
 }
 
 function withCors(response: Response) {
