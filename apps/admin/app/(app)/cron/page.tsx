@@ -1,9 +1,19 @@
 "use client";
 
-import { AlertCircle } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGateway } from "@/components/gateway-provider";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+	AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -282,8 +292,6 @@ export default function CronPage() {
 	const removeJob = useCallback(
 		async (job: CronJob) => {
 			if (busy) return;
-			const confirmed = window.confirm(`Remove "${job.name}"?`);
-			if (!confirmed) return;
 			setBusy(true);
 			setError(null);
 			try {
@@ -302,8 +310,15 @@ export default function CronPage() {
 		[busy, cronRemove, refresh, runsJobId],
 	);
 
-	const loadRuns = useCallback(
+	const toggleRuns = useCallback(
 		async (jobId: string) => {
+			// If clicking the same job, collapse it
+			if (runsJobId === jobId) {
+				setRunsJobId(null);
+				setRuns([]);
+				return;
+			}
+			// Otherwise, load runs for the new job
 			setRunsJobId(jobId);
 			setError(null);
 			try {
@@ -317,7 +332,7 @@ export default function CronPage() {
 				setError(err instanceof Error ? err.message : String(err));
 			}
 		},
-		[cronRuns],
+		[cronRuns, runsJobId],
 	);
 
 	const selectedRunsLabel = useMemo(
@@ -351,10 +366,9 @@ export default function CronPage() {
 							</div>
 						</div>
 						{error ? (
-							<Alert variant="destructive" className="mt-3">
-								<AlertCircle className="size-4" />
-								<AlertDescription>{error}</AlertDescription>
-							</Alert>
+							<p className="text-xs text-rose-500 dark:text-rose-400 mt-3">
+								{error}
+							</p>
 						) : null}
 					</CardContent>
 				</Card>
@@ -827,35 +841,42 @@ export default function CronPage() {
 									key={job.id}
 									role="button"
 									tabIndex={0}
-									onClick={() => loadRuns(job.id)}
+									onClick={() => toggleRuns(job.id)}
 									onKeyDown={(e) => {
 										if (e.key === "Enter" || e.key === " ") {
 											e.preventDefault();
-											loadRuns(job.id);
+											toggleRuns(job.id);
 										}
 									}}
-									className={`w-full text-left border border-border/60 rounded-md p-4 cursor-pointer hover:bg-muted/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-										runsJobId === job.id ? "bg-muted/30" : ""
+									className={`w-full text-left rounded-md p-4 -mx-4 cursor-pointer hover:bg-muted/30 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+										runsJobId === job.id ? "bg-muted/20" : ""
 									}`}
 								>
 									<div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-										<div className="space-y-1">
-											<div className="text-sm font-medium">{job.name}</div>
-											<div className="text-xs text-muted-foreground">
-												{formatCronSchedule(job)}
-											</div>
-											<div className="text-xs text-muted-foreground">
-												{formatCronPayload(job)}
-											</div>
-											{job.agentId ? (
+										<div className="flex items-start gap-2">
+											<ChevronDown
+												className={`h-4 w-4 mt-0.5 text-muted-foreground shrink-0 transition-transform ${
+													runsJobId === job.id ? "rotate-180" : ""
+												}`}
+											/>
+											<div className="space-y-1">
+												<div className="text-sm font-medium">{job.name}</div>
 												<div className="text-xs text-muted-foreground">
-													Agent: {job.agentId}
+													{formatCronSchedule(job)}
 												</div>
-											) : null}
-											<div className="flex flex-wrap gap-2 pt-1">
-												<Badge>{job.enabled ? "enabled" : "disabled"}</Badge>
-												<Badge>{job.sessionTarget}</Badge>
-												<Badge>{job.wakeMode}</Badge>
+												<div className="text-xs text-muted-foreground">
+													{formatCronPayload(job)}
+												</div>
+												{job.agentId ? (
+													<div className="text-xs text-muted-foreground">
+														Agent: {job.agentId}
+													</div>
+												) : null}
+												<div className="flex flex-wrap gap-2 pt-1">
+													<Badge>{job.enabled ? "enabled" : "disabled"}</Badge>
+													<Badge>{job.sessionTarget}</Badge>
+													<Badge>{job.wakeMode}</Badge>
+												</div>
 											</div>
 										</div>
 										<div className="space-y-2 text-right">
@@ -885,28 +906,40 @@ export default function CronPage() {
 												>
 													Run
 												</Button>
-												<Button
-													variant="outline"
-													size="sm"
-													disabled={busy}
-													onClick={(event) => {
-														event.stopPropagation();
-														void loadRuns(job.id);
-													}}
-												>
-													Runs
-												</Button>
-												<Button
-													variant="destructive"
-													size="sm"
-													disabled={busy}
-													onClick={(event) => {
-														event.stopPropagation();
-														void removeJob(job);
-													}}
-												>
-													Remove
-												</Button>
+												<AlertDialog>
+													<AlertDialogTrigger asChild>
+														<Button
+															variant="destructive"
+															size="sm"
+															disabled={busy}
+															onClick={(event) => {
+																event.stopPropagation();
+															}}
+														>
+															Remove
+														</Button>
+													</AlertDialogTrigger>
+													<AlertDialogContent>
+														<AlertDialogHeader>
+															<AlertDialogTitle>
+																Remove cron job?
+															</AlertDialogTitle>
+															<AlertDialogDescription>
+																This will delete "{job.name}". This action
+																cannot be undone.
+															</AlertDialogDescription>
+														</AlertDialogHeader>
+														<AlertDialogFooter>
+															<AlertDialogCancel>Cancel</AlertDialogCancel>
+															<AlertDialogAction
+																onClick={() => void removeJob(job)}
+																className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+															>
+																Remove
+															</AlertDialogAction>
+														</AlertDialogFooter>
+													</AlertDialogContent>
+												</AlertDialog>
 											</div>
 										</div>
 									</div>
@@ -932,22 +965,31 @@ export default function CronPage() {
 					) : runs.length === 0 ? (
 						<div className="text-sm text-muted-foreground">No runs yet.</div>
 					) : (
-						<div className="space-y-2">
+						<div className="divide-y divide-border/40">
 							{runs.map((entry) => (
 								<div
 									key={`${entry.jobId}-${entry.ts}`}
-									className="border border-border/60 rounded-md p-3 flex flex-col gap-1 md:flex-row md:items-center md:justify-between"
+									className="py-3 first:pt-0 last:pb-0 flex flex-col gap-1 md:flex-row md:items-start md:justify-between"
 								>
-									<div>
-										<div className="text-sm font-medium">{entry.status}</div>
-										<div className="text-xs text-muted-foreground">
+									<div className="flex items-start gap-3">
+										<Badge
+											variant={entry.status === "ok" ? "success" : "error"}
+											className="mt-0.5"
+										>
+											{entry.status}
+										</Badge>
+										<div className="text-sm text-muted-foreground">
 											{entry.summary ?? ""}
+											{entry.error ? (
+												<span className="block text-rose-500 dark:text-rose-400">
+													{entry.error}
+												</span>
+											) : null}
 										</div>
 									</div>
-									<div className="text-xs text-muted-foreground md:text-right">
+									<div className="text-xs text-muted-foreground md:text-right whitespace-nowrap">
 										<div>{formatMs(entry.ts)}</div>
 										<div>{formatDurationMs(entry.durationMs ?? 0)}</div>
-										{entry.error ? <div>{entry.error}</div> : null}
 									</div>
 								</div>
 							))}
