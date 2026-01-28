@@ -1,3 +1,7 @@
+import { regex } from "arkregex";
+
+const TIME_RE = regex("^([01]?\\d|2[0-3]):([0-5]\\d)$");
+
 export function formatCronSchedule(schedule: unknown) {
 	if (!schedule || typeof schedule !== "object") return "unknown";
 	const kind = (schedule as { kind?: string }).kind ?? "unknown";
@@ -21,7 +25,7 @@ export function formatCronSchedule(schedule: unknown) {
 }
 
 export function parseTime(value: string) {
-	const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+	const match = TIME_RE.exec(value.trim());
 	if (!match) return null;
 	const hour = Number.parseInt(match[1] ?? "0", 10);
 	const minute = Number.parseInt(match[2] ?? "0", 10);

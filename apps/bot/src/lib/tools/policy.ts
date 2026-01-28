@@ -56,6 +56,21 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"surveys-global-stats",
 	],
 	"group:memory": ["searchmemories", "addmemory"],
+	"group:yandex-wiki": [
+		"wiki_page_get",
+		"wiki_page_get_by_id",
+		"wiki_page_create",
+		"wiki_page_update",
+		"wiki_page_append_content",
+	],
+	"group:figma-read": [
+		"figma_me",
+		"figma_file_get",
+		"figma_file_nodes_get",
+		"figma_file_comments_list",
+		"figma_project_files_list",
+	],
+	"group:google-public": ["google_public_doc_read", "google_public_sheet_read"],
 	"group:runtime-skills": [],
 };
 

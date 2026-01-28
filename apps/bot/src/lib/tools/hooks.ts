@@ -12,6 +12,7 @@ export type ToolHooks = {
 	beforeToolCall?: (
 		ctx: ToolHookContext,
 	) => { allow?: boolean; reason?: string } | undefined;
+	onToolStart?: (ctx: ToolHookContext) => void;
 	afterToolCall?: (
 		ctx: ToolHookContext & { durationMs: number; error?: string },
 	) => void;
@@ -50,6 +51,7 @@ export function wrapToolMapWithHooks(
 							: "TOOL_CALL_BLOCKED",
 					);
 				}
+				hooks.onToolStart?.(context);
 				const startedAt = Date.now();
 				try {
 					const result = await execute(input as never, options);

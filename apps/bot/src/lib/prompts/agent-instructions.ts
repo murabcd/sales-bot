@@ -87,6 +87,24 @@ export function buildAgentInstructions(
 		);
 	}
 
+	if (options.toolLines.includes("wiki_page_get")) {
+		toolSections.push(
+			"- Use Yandex Wiki tools for docs: `wiki_page_get`/`wiki_page_get_by_id` to read, `wiki_page_create`/`wiki_page_update`/`wiki_page_append_content` to write.",
+		);
+	}
+
+	if (options.toolLines.includes("figma_file_get")) {
+		toolSections.push(
+			"- Use Figma tools for design docs: `figma_file_get`/`figma_file_nodes_get` to read file structure, `figma_file_comments_list` for feedback, `figma_project_files_list` to list project files. If the user shares a figma.com link, extract file key/node id from the URL.",
+		);
+	}
+
+	if (options.toolLines.includes("google_public_doc_read")) {
+		toolSections.push(
+			"- Use `google_public_doc_read`/`google_public_sheet_read` for publicly shared Google Docs/Sheets links (no OAuth).",
+		);
+	}
+
 	if (
 		options.toolLines.includes("posthog") ||
 		options.toolLines.includes("insights") ||

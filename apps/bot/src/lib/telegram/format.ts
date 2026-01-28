@@ -1,3 +1,4 @@
+import { regex } from "arkregex";
 import {
 	chunkMarkdownIR,
 	type MarkdownIR,
@@ -6,6 +7,11 @@ import {
 } from "../markdown/ir.js";
 import { renderMarkdownWithMarkers } from "../markdown/render.js";
 
+const AMP_RE = regex("&", "g");
+const LT_RE = regex("<", "g");
+const GT_RE = regex(">", "g");
+const QUOTE_RE = regex('"', "g");
+
 export type TelegramFormattedChunk = {
 	html: string;
 	text: string;
@@ -13,13 +19,13 @@ export type TelegramFormattedChunk = {
 
 function escapeHtml(text: string): string {
 	return text
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;");
+		.replace(AMP_RE, "&amp;")
+		.replace(LT_RE, "&lt;")
+		.replace(GT_RE, "&gt;");
 }
 
 function escapeHtmlAttr(text: string): string {
-	return escapeHtml(text).replace(/"/g, "&quot;");
+	return escapeHtml(text).replace(QUOTE_RE, "&quot;");
 }
 
 function buildTelegramLink(link: MarkdownLinkSpan, _text: string) {

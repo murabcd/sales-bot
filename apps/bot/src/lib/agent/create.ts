@@ -13,6 +13,7 @@ import {
 	type UIMessage,
 	type UIMessageChunk,
 } from "ai";
+import { regex } from "arkregex";
 import { z } from "zod";
 import type { ModelConfig } from "../../models-core.js";
 import {
@@ -22,6 +23,7 @@ import {
 	parseTime,
 } from "../bot/cron.js";
 import type { BotContext } from "../bot/types.js";
+import type { FigmaClient } from "../clients/figma.js";
 import type { JiraClient } from "../clients/jira.js";
 import type { TrackerClient } from "../clients/tracker.js";
 import {
@@ -31,6 +33,7 @@ import {
 	normalizeIssuesResult,
 	rankIssues,
 } from "../clients/tracker.js";
+import type { WikiClient } from "../clients/wiki.js";
 import type { FilePart } from "../files.js";
 import { buildJiraJql, normalizeJiraIssue } from "../jira.js";
 import { buildAgentInstructions } from "../prompts/agent-instructions.js";
@@ -84,6 +87,7 @@ export type CreateAgentToolsOptions = {
 	chatId?: string;
 	ctx?: BotContext;
 	webSearchEnabled?: boolean;
+	onToolStart?: (toolName: string) => void;
 };
 
 export type CandidateIssue = {
@@ -110,6 +114,8 @@ export type AgentToolsDeps = {
 	jiraProjectKey: string;
 	jiraBoardId: number;
 	jiraEnabled: boolean;
+	wikiEnabled: boolean;
+	figmaEnabled: boolean;
 	posthogPersonalApiKey: string;
 	getPosthogTools: () => Promise<ToolSet>;
 	cronClient?: {
@@ -120,6 +126,8 @@ export type AgentToolsDeps = {
 		remove: (params: { jobId: string }) => Promise<unknown>;
 	};
 	trackerClient: TrackerClient;
+	wikiClient: WikiClient;
+	figmaClient: FigmaClient;
 	jiraClient: JiraClient;
 	logJiraAudit: (
 		ctx: BotContext | undefined,
@@ -144,6 +152,7 @@ export type CreateAgentOptions = {
 	chatId?: string;
 	userName?: string;
 	onToolStep?: (toolNames: string[]) => Promise<void> | void;
+	onToolStart?: (toolName: string) => void;
 	ctx?: BotContext;
 	webSearchEnabled?: boolean;
 };
@@ -161,6 +170,33 @@ export type AgentDeps = {
 function resolveWebSearchContextSize(value: string): "low" | "medium" | "high" {
 	if (value === "medium" || value === "high") return value;
 	return "low";
+}
+
+const FIGMA_PATH_RE = regex("/(file|design)/([^/]+)");
+const DOC_PATH_RE = regex("/document/d/([^/]+)");
+const SHEET_PATH_RE = regex("/spreadsheets/d/([^/]+)");
+
+function extractFigmaFileKey(input: string): string | null {
+	try {
+		const url = new URL(input);
+		if (!url.hostname.endsWith("figma.com")) return null;
+		const match = url.pathname.match(FIGMA_PATH_RE);
+		return match?.[2] ?? null;
+	} catch {
+		return null;
+	}
+}
+
+function extractFigmaNodeId(input: string): string | null {
+	try {
+		const url = new URL(input);
+		if (!url.hostname.endsWith("figma.com")) return null;
+		const nodeId =
+			url.searchParams.get("node-id") ?? url.hash.replace("#node-id=", "");
+		return nodeId?.trim() || null;
+	} catch {
+		return null;
+	}
 }
 
 function buildMemoryTools(config: {
@@ -360,6 +396,603 @@ export function createAgentToolsFactory(
 				},
 			}),
 		);
+
+		registerTool(
+			{
+				name: "google_public_doc_read",
+				description: "Read a public Google Doc by shared link.",
+				source: "web",
+				origin: "google-public",
+			},
+			tool({
+				description: "Read a public Google Doc by shared link.",
+				inputSchema: z.object({
+					url: z.string().describe("Google Docs shared URL"),
+				}),
+				execute: async ({ url }) => {
+					try {
+						const parsed = new URL(url);
+						if (!parsed.hostname.endsWith("docs.google.com")) {
+							throw new Error("unsupported_host");
+						}
+						const match = parsed.pathname.match(DOC_PATH_RE);
+						const docId = match?.[1];
+						if (!docId) throw new Error("missing_doc_id");
+						const exportUrl = `https://docs.google.com/document/d/${docId}/export?format=txt`;
+						const response = await fetch(exportUrl);
+						if (!response.ok) {
+							const body = await response.text();
+							throw new Error(
+								`doc_fetch_error:${response.status}:${response.statusText}:${body}`,
+							);
+						}
+						const text = await response.text();
+						return {
+							ok: true,
+							docId,
+							chars: text.length,
+							text,
+						};
+					} catch (error) {
+						deps.logDebug("google_public_doc_read error", {
+							error: String(error),
+						});
+						return { error: String(error) };
+					}
+				},
+			}),
+		);
+
+		registerTool(
+			{
+				name: "google_public_sheet_read",
+				description: "Read a public Google Sheet by shared link.",
+				source: "web",
+				origin: "google-public",
+			},
+			tool({
+				description: "Read a public Google Sheet by shared link.",
+				inputSchema: z.object({
+					url: z.string().describe("Google Sheets shared URL"),
+					gid: z.string().optional().describe("Sheet gid (overrides link gid)"),
+					format: z.enum(["csv", "tsv"]).optional().describe("Export format"),
+				}),
+				execute: async ({ url, gid, format }) => {
+					try {
+						const parsed = new URL(url);
+						if (!parsed.hostname.endsWith("docs.google.com")) {
+							throw new Error("unsupported_host");
+						}
+						const match = parsed.pathname.match(SHEET_PATH_RE);
+						const sheetId = match?.[1];
+						if (!sheetId) throw new Error("missing_sheet_id");
+						const resolvedGid =
+							gid ??
+							parsed.searchParams.get("gid") ??
+							parsed.hash.replace("#gid=", "").trim() ??
+							"0";
+						const exportFormat = format ?? "csv";
+						const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=${exportFormat}&gid=${resolvedGid}`;
+						const response = await fetch(exportUrl);
+						if (!response.ok) {
+							const body = await response.text();
+							throw new Error(
+								`sheet_fetch_error:${response.status}:${response.statusText}:${body}`,
+							);
+						}
+						const text = await response.text();
+						return {
+							ok: true,
+							sheetId,
+							gid: resolvedGid,
+							format: exportFormat,
+							chars: text.length,
+							text,
+						};
+					} catch (error) {
+						deps.logDebug("google_public_sheet_read error", {
+							error: String(error),
+						});
+						return { error: String(error) };
+					}
+				},
+			}),
+		);
+
+		if (deps.figmaEnabled) {
+			registerTool(
+				{
+					name: "figma_me",
+					description: "Get current Figma user profile.",
+					source: "figma",
+					origin: "figma",
+				},
+				tool({
+					description: "Get current Figma user profile.",
+					inputSchema: z.object({}),
+					execute: async () => {
+						try {
+							return await deps.figmaClient.figmaMe();
+						} catch (error) {
+							deps.logDebug("figma_me error", { error: String(error) });
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "figma_file_get",
+					description: "Get Figma file metadata and document tree.",
+					source: "figma",
+					origin: "figma",
+				},
+				tool({
+					description: "Get Figma file metadata and document tree.",
+					inputSchema: z.object({
+						fileKey: z.string().optional().describe("Figma file key"),
+						url: z.string().optional().describe("Figma file URL"),
+						version: z.string().optional().describe("File version id"),
+						ids: z.array(z.string()).optional().describe("Node ids to include"),
+						depth: z.number().int().optional().describe("Depth of the tree"),
+						geometry: z
+							.enum(["paths", "bounds"])
+							.optional()
+							.describe("Geometry format"),
+						pluginData: z
+							.string()
+							.optional()
+							.describe("Plugin id to include data for"),
+						branchData: z.boolean().optional().describe("Include branch data"),
+					}),
+					execute: async ({
+						fileKey,
+						url,
+						version,
+						ids,
+						depth,
+						geometry,
+						pluginData,
+						branchData,
+					}) => {
+						try {
+							const resolvedKey =
+								fileKey ?? (url ? extractFigmaFileKey(url) : null);
+							if (!resolvedKey) {
+								throw new Error("missing_file_key");
+							}
+							return await deps.figmaClient.figmaFileGet({
+								fileKey: resolvedKey,
+								version,
+								ids,
+								depth,
+								geometry,
+								pluginData,
+								branchData,
+							});
+						} catch (error) {
+							deps.logDebug("figma_file_get error", { error: String(error) });
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "figma_file_nodes_get",
+					description: "Get specific nodes from a Figma file.",
+					source: "figma",
+					origin: "figma",
+				},
+				tool({
+					description: "Get specific nodes from a Figma file.",
+					inputSchema: z.object({
+						fileKey: z.string().optional().describe("Figma file key"),
+						url: z.string().optional().describe("Figma file URL"),
+						ids: z.array(z.string()).optional().describe("Node ids to fetch"),
+						nodeId: z
+							.string()
+							.optional()
+							.describe("Single node id (alternative to ids)"),
+						version: z.string().optional().describe("File version id"),
+						depth: z.number().int().optional().describe("Depth of the tree"),
+						geometry: z
+							.enum(["paths", "bounds"])
+							.optional()
+							.describe("Geometry format"),
+						pluginData: z
+							.string()
+							.optional()
+							.describe("Plugin id to include data for"),
+						branchData: z.boolean().optional().describe("Include branch data"),
+					}),
+					execute: async ({
+						fileKey,
+						url,
+						ids,
+						nodeId,
+						version,
+						depth,
+						geometry,
+						pluginData,
+						branchData,
+					}) => {
+						try {
+							const resolvedKey =
+								fileKey ?? (url ? extractFigmaFileKey(url) : null);
+							if (!resolvedKey) {
+								throw new Error("missing_file_key");
+							}
+							const resolvedIds =
+								ids?.length && ids.length > 0
+									? ids
+									: nodeId
+										? [nodeId]
+										: url
+											? (() => {
+													const fromUrl = extractFigmaNodeId(url);
+													return fromUrl ? [fromUrl] : [];
+												})()
+											: [];
+							if (!resolvedIds.length) {
+								throw new Error("missing_node_ids");
+							}
+							return await deps.figmaClient.figmaFileNodesGet({
+								fileKey: resolvedKey,
+								ids: resolvedIds,
+								version,
+								depth,
+								geometry,
+								pluginData,
+								branchData,
+							});
+						} catch (error) {
+							deps.logDebug("figma_file_nodes_get error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "figma_file_comments_list",
+					description: "List comments for a Figma file.",
+					source: "figma",
+					origin: "figma",
+				},
+				tool({
+					description: "List comments for a Figma file.",
+					inputSchema: z.object({
+						fileKey: z.string().optional().describe("Figma file key"),
+						url: z.string().optional().describe("Figma file URL"),
+						limit: z
+							.number()
+							.int()
+							.optional()
+							.describe("Max comments to return"),
+						after: z.string().optional().describe("Pagination cursor"),
+					}),
+					execute: async ({ fileKey, url, limit, after }) => {
+						try {
+							const resolvedKey =
+								fileKey ?? (url ? extractFigmaFileKey(url) : null);
+							if (!resolvedKey) {
+								throw new Error("missing_file_key");
+							}
+							return await deps.figmaClient.figmaFileCommentsList({
+								fileKey: resolvedKey,
+								limit,
+								after,
+							});
+						} catch (error) {
+							deps.logDebug("figma_file_comments_list error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "figma_project_files_list",
+					description: "List files in a Figma project.",
+					source: "figma",
+					origin: "figma",
+				},
+				tool({
+					description: "List files in a Figma project.",
+					inputSchema: z.object({
+						projectId: z.string().describe("Figma project id"),
+					}),
+					execute: async ({ projectId }) => {
+						try {
+							return await deps.figmaClient.figmaProjectFilesList({
+								projectId,
+							});
+						} catch (error) {
+							deps.logDebug("figma_project_files_list error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+		}
+
+		if (deps.wikiEnabled) {
+			registerTool(
+				{
+					name: "wiki_page_get",
+					description: "Get Yandex Wiki page details by slug.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Get Yandex Wiki page details by slug.",
+					inputSchema: z.object({
+						slug: z.string().describe("Page slug"),
+						fields: z
+							.string()
+							.optional()
+							.describe(
+								"Comma-separated fields: content,attributes,urls,breadcrumbs,redirect",
+							),
+						raiseOnRedirect: z
+							.boolean()
+							.optional()
+							.describe("Throw if the page is a redirect"),
+						revisionId: z.number().optional().describe("Specific revision id"),
+					}),
+					execute: async ({ slug, fields, raiseOnRedirect, revisionId }) => {
+						try {
+							return await deps.wikiClient.wikiPageGet({
+								slug,
+								fields,
+								raiseOnRedirect,
+								revisionId,
+							});
+						} catch (error) {
+							deps.logDebug("wiki_page_get error", { error: String(error) });
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "wiki_page_get_by_id",
+					description: "Get Yandex Wiki page details by id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Get Yandex Wiki page details by id.",
+					inputSchema: z.object({
+						id: z.number().describe("Page id"),
+						fields: z
+							.string()
+							.optional()
+							.describe(
+								"Comma-separated fields: content,attributes,urls,breadcrumbs,redirect",
+							),
+						raiseOnRedirect: z
+							.boolean()
+							.optional()
+							.describe("Throw if the page is a redirect"),
+						followRedirects: z
+							.boolean()
+							.optional()
+							.describe("Follow redirects automatically"),
+						revisionId: z.number().optional().describe("Specific revision id"),
+					}),
+					execute: async ({
+						id,
+						fields,
+						raiseOnRedirect,
+						followRedirects,
+						revisionId,
+					}) => {
+						try {
+							return await deps.wikiClient.wikiPageGetById({
+								id,
+								fields,
+								raiseOnRedirect,
+								followRedirects,
+								revisionId,
+							});
+						} catch (error) {
+							deps.logDebug("wiki_page_get_by_id error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "wiki_page_create",
+					description: "Create a new Yandex Wiki page.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Create a new Yandex Wiki page.",
+					inputSchema: z.object({
+						slug: z.string().describe("Page slug"),
+						title: z.string().describe("Page title"),
+						content: z.string().optional().describe("Page content"),
+						pageType: z
+							.string()
+							.optional()
+							.describe("page, grid, cloud_page, wysiwyg, template"),
+						gridFormat: z.string().optional().describe("Grid format"),
+						cloudPage: z
+							.record(z.any())
+							.optional()
+							.describe("Cloud page payload"),
+						fields: z
+							.string()
+							.optional()
+							.describe(
+								"Comma-separated fields: content,attributes,urls,breadcrumbs,redirect",
+							),
+						isSilent: z.boolean().optional().describe("Suppress notifications"),
+					}),
+					execute: async ({
+						slug,
+						title,
+						content,
+						pageType,
+						gridFormat,
+						cloudPage,
+						fields,
+						isSilent,
+					}) => {
+						try {
+							return await deps.wikiClient.wikiPageCreate({
+								pageType: pageType ?? "wysiwyg",
+								slug,
+								title,
+								content,
+								gridFormat,
+								cloudPage,
+								fields,
+								isSilent,
+							});
+						} catch (error) {
+							deps.logDebug("wiki_page_create error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "wiki_page_update",
+					description: "Update an existing Yandex Wiki page.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Update an existing Yandex Wiki page.",
+					inputSchema: z.object({
+						id: z.number().describe("Page id"),
+						title: z.string().optional().describe("New title"),
+						content: z.string().optional().describe("New content"),
+						redirect: z.record(z.any()).optional().describe("Redirect payload"),
+						allowMerge: z.boolean().optional().describe("Allow merging edits"),
+						fields: z
+							.string()
+							.optional()
+							.describe(
+								"Comma-separated fields: content,attributes,urls,breadcrumbs,redirect",
+							),
+						isSilent: z.boolean().optional().describe("Suppress notifications"),
+					}),
+					execute: async ({
+						id,
+						title,
+						content,
+						redirect,
+						allowMerge,
+						fields,
+						isSilent,
+					}) => {
+						try {
+							return await deps.wikiClient.wikiPageUpdate({
+								id,
+								title,
+								content,
+								redirect,
+								allowMerge,
+								fields,
+								isSilent,
+							});
+						} catch (error) {
+							deps.logDebug("wiki_page_update error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "wiki_page_append_content",
+					description: "Append content to an existing Yandex Wiki page.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Append content to an existing Yandex Wiki page.",
+					inputSchema: z.object({
+						id: z.number().describe("Page id"),
+						content: z.string().describe("Content to append"),
+						body: z
+							.record(z.any())
+							.optional()
+							.describe("Body location payload"),
+						anchor: z
+							.record(z.any())
+							.optional()
+							.describe("Anchor placement payload"),
+						section: z
+							.record(z.any())
+							.optional()
+							.describe("Section placement payload"),
+						fields: z
+							.string()
+							.optional()
+							.describe(
+								"Comma-separated fields: content,attributes,urls,breadcrumbs,redirect",
+							),
+						isSilent: z.boolean().optional().describe("Suppress notifications"),
+					}),
+					execute: async ({
+						id,
+						content,
+						body,
+						anchor,
+						section,
+						fields,
+						isSilent,
+					}) => {
+						try {
+							return await deps.wikiClient.wikiPageAppendContent({
+								id,
+								content,
+								body,
+								anchor,
+								section,
+								fields,
+								isSilent,
+							});
+						} catch (error) {
+							deps.logDebug("wiki_page_append_content error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+		}
 
 		if (deps.cronClient) {
 			registerTool(
@@ -960,6 +1593,9 @@ export function createAgentToolsFactory(
 					user_id: userId,
 					input,
 				});
+			},
+			onToolStart: ({ toolName }) => {
+				options?.onToolStart?.(toolName);
 			},
 			afterToolCall: ({ toolName, toolCallId, durationMs, error }) => {
 				deps.logger.info({

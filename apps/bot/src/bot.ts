@@ -9,6 +9,7 @@ import {
 	experimental_transcribe as transcribe,
 	type UIMessageChunk,
 } from "ai";
+import { regex } from "arkregex";
 import { API_CONSTANTS, Bot, InlineKeyboard } from "grammy";
 import {
 	type AgentToolCall,
@@ -45,12 +46,14 @@ import {
 	parseChannelConfig,
 	shouldRequireMentionForChannel,
 } from "./lib/channels.js";
+import { createFigmaClient } from "./lib/clients/figma.js";
 import { createJiraClient } from "./lib/clients/jira.js";
 import {
 	createTrackerClient,
 	extractCommentsText,
 	type TrackerToolResult,
 } from "./lib/clients/tracker.js";
+import { createWikiClient } from "./lib/clients/wiki.js";
 import { type BotEnv, loadBotEnv } from "./lib/config/env.js";
 import { getChatState } from "./lib/context/chat-state.js";
 import {
@@ -98,6 +101,17 @@ import {
 } from "./models-core.js";
 import { type RuntimeSkill, resolveToolRef } from "./skills-core.js";
 
+const TRACKER_URL_RE = regex.as(
+	"https?://(?:www\\.)?tracker\\.yandex\\.ru/(?<key>[A-Z][A-Z0-9]+-\\d+)\\b",
+	"gi",
+);
+const JIRA_URL_RE = regex.as(
+	"https?://\\S+/browse/(?<key>[A-Z][A-Z0-9]+-\\d+)\\b",
+	"gi",
+);
+const FIGMA_URL_RE = regex.as("https?://\\S*figma\\.com/(file|design)/", "i");
+const ISSUE_KEY_RE = regex("\\b[A-Z]{2,10}-\\d+\\b", "g");
+
 export type { BotEnv } from "./lib/config/env.js";
 
 export type CreateBotOptions = {
@@ -127,6 +141,9 @@ export async function createBot(options: CreateBotOptions) {
 		TRACKER_TOKEN,
 		TRACKER_CLOUD_ORG_ID,
 		TRACKER_ORG_ID,
+		WIKI_TOKEN,
+		WIKI_CLOUD_ORG_ID,
+		FIGMA_TOKEN,
 		JIRA_BASE_URL,
 		JIRA_EMAIL,
 		JIRA_API_TOKEN,
@@ -318,6 +335,121 @@ export async function createBot(options: CreateBotOptions) {
 			},
 			agentTools,
 		);
+
+		register(
+			{
+				name: "google_public_doc_read",
+				description: "Read a public Google Doc by shared link.",
+				source: "web",
+				origin: "google-public",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "google_public_sheet_read",
+				description: "Read a public Google Sheet by shared link.",
+				source: "web",
+				origin: "google-public",
+			},
+			agentTools,
+		);
+
+		if (FIGMA_TOKEN) {
+			register(
+				{
+					name: "figma_me",
+					description: "Get current Figma user profile.",
+					source: "figma",
+					origin: "figma",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "figma_file_get",
+					description: "Get Figma file metadata and document tree.",
+					source: "figma",
+					origin: "figma",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "figma_file_nodes_get",
+					description: "Get specific nodes from a Figma file.",
+					source: "figma",
+					origin: "figma",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "figma_file_comments_list",
+					description: "List comments for a Figma file.",
+					source: "figma",
+					origin: "figma",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "figma_project_files_list",
+					description: "List files in a Figma project.",
+					source: "figma",
+					origin: "figma",
+				},
+				agentTools,
+			);
+		}
+
+		if (WIKI_TOKEN) {
+			register(
+				{
+					name: "wiki_page_get",
+					description: "Get Yandex Wiki page details by slug.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "wiki_page_get_by_id",
+					description: "Get Yandex Wiki page details by id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "wiki_page_create",
+					description: "Create a new Yandex Wiki page.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "wiki_page_update",
+					description: "Update an existing Yandex Wiki page.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "wiki_page_append_content",
+					description: "Append content to an existing Yandex Wiki page.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+		}
 
 		if (options.cronClient) {
 			register(
@@ -540,6 +672,21 @@ export async function createBot(options: CreateBotOptions) {
 	const { trackerCallTool, trackerHealthCheck, getLastTrackerCallAt } =
 		trackerClient;
 
+	const wikiClient = createWikiClient({
+		token: WIKI_TOKEN ?? "",
+		apiBaseUrl: "https://api.wiki.yandex.net",
+		cloudOrgId: WIKI_CLOUD_ORG_ID,
+		logDebug,
+	});
+	const wikiEnabled = Boolean(WIKI_TOKEN);
+
+	const figmaClient = createFigmaClient({
+		token: FIGMA_TOKEN ?? "",
+		apiBaseUrl: "https://api.figma.com",
+		logDebug,
+	});
+	const figmaEnabled = Boolean(FIGMA_TOKEN);
+
 	const jiraClient = createJiraClient({
 		baseUrl: JIRA_BASE_URL,
 		email: JIRA_EMAIL,
@@ -631,6 +778,43 @@ export async function createBot(options: CreateBotOptions) {
 		}
 		return merged;
 	}
+
+	function startTypingHeartbeat(
+		ctx: BotContext,
+		options: { intervalMs?: number } = {},
+	) {
+		const intervalMs = options.intervalMs ?? 4500;
+		let stopped = false;
+		const tick = async () => {
+			if (stopped) return;
+			try {
+				await ctx.replyWithChatAction("typing");
+			} catch {
+				// Ignore typing failures to avoid interrupting the run.
+			}
+		};
+		void tick();
+		const timer = setInterval(() => {
+			void tick();
+		}, intervalMs);
+		return () => {
+			stopped = true;
+			clearInterval(timer);
+		};
+	}
+
+	function scheduleDelayedStatus(
+		send: (message: string) => Promise<void> | void,
+		message: string,
+		delayMs: number,
+	) {
+		const timer = setTimeout(() => {
+			void send(message);
+		}, delayMs);
+		return () => {
+			clearTimeout(timer);
+		};
+	}
 	const {
 		buildOrchestrationPlan,
 		buildOrchestrationSummary,
@@ -690,10 +874,14 @@ export async function createBot(options: CreateBotOptions) {
 		jiraProjectKey: JIRA_PROJECT_KEY,
 		jiraBoardId: JIRA_BOARD_ID,
 		jiraEnabled,
+		wikiEnabled,
+		figmaEnabled,
 		posthogPersonalApiKey: POSTHOG_PERSONAL_API_KEY,
 		getPosthogTools,
 		cronClient,
 		trackerClient,
+		wikiClient,
+		figmaClient,
 		jiraClient,
 		logJiraAudit,
 		supermemoryApiKey: SUPERMEMORY_API_KEY,
@@ -724,9 +912,31 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	function extractExplicitIssueKeys(text: string): string[] {
-		const matches = text.match(/\b[A-Z]{2,10}-\d+\b/g) ?? [];
-		const unique = new Set(matches.map((match) => match.toUpperCase()));
+		const matches = Array.from(text.matchAll(ISSUE_KEY_RE)).map((match) =>
+			match[0].toUpperCase(),
+		);
+		const unique = new Set(matches);
 		return Array.from(unique);
+	}
+
+	function extractTrackerIssueKeysFromUrls(text: string): string[] {
+		const matches = Array.from(text.matchAll(TRACKER_URL_RE))
+			.map((match) => match.groups?.key ?? match[1])
+			.filter((value): value is string => Boolean(value))
+			.map((value) => value.toUpperCase());
+		return Array.from(new Set(matches));
+	}
+
+	function extractJiraIssueKeysFromUrls(text: string): string[] {
+		const matches = Array.from(text.matchAll(JIRA_URL_RE))
+			.map((match) => match.groups?.key ?? match[1])
+			.filter((value): value is string => Boolean(value))
+			.map((value) => value.toUpperCase());
+		return Array.from(new Set(matches));
+	}
+
+	function hasFigmaUrl(text: string): boolean {
+		return FIGMA_URL_RE.test(text);
 	}
 
 	function isJiraIssueKey(key: string) {
@@ -816,9 +1026,9 @@ export async function createBot(options: CreateBotOptions) {
 
 	const START_GREETING =
 		"Привет!\n\n" +
-		"Я Омни, персональный ассистент.\n" +
-		"Отвечаю по задачам, статусам и итогам, могу искать в интернете.\n" +
-		"Можно писать текстом или голосом.\n" +
+		"Я Omni, персональный ассистент.\n" +
+		"Помогу с задачами, аналитикой, могу искать в интернете.\n" +
+		"Принимаю текст, голос, изображения и PDF.\n" +
 		"Если есть номер задачи — укажите его, например PROJ-1234.\n\n";
 
 	registerCommands({
@@ -867,6 +1077,10 @@ export async function createBot(options: CreateBotOptions) {
 		formatUptime,
 		getUptimeSeconds: options.getUptimeSeconds,
 		getLastTrackerCallAt,
+		jiraEnabled,
+		posthogEnabled: Boolean(POSTHOG_PERSONAL_API_KEY),
+		webSearchEnabled: WEB_SEARCH_ENABLED,
+		memoryEnabled: Boolean(SUPERMEMORY_API_KEY),
 	});
 
 	async function loadTelegramImageParts(
@@ -1058,7 +1272,7 @@ export async function createBot(options: CreateBotOptions) {
 		const caption = ctx.message.caption?.trim() ?? "";
 		try {
 			const files = await loadTelegramImageParts(ctx);
-			await handleIncomingText(ctx, caption, files);
+			await handleIncomingText(ctx, caption, files, undefined, true);
 		} catch (error) {
 			logDebug("photo handling error", { error: String(error) });
 			setLogError(ctx, error);
@@ -1075,7 +1289,7 @@ export async function createBot(options: CreateBotOptions) {
 				await sendText(ctx, "Поддерживаются только PDF документы.");
 				return;
 			}
-			await handleIncomingText(ctx, caption, files);
+			await handleIncomingText(ctx, caption, files, undefined, true);
 		} catch (error) {
 			logDebug("document handling error", { error: String(error) });
 			setLogError(ctx, error);
@@ -1090,9 +1304,20 @@ export async function createBot(options: CreateBotOptions) {
 			await sendText(ctx, "Не удалось прочитать голосовое сообщение.");
 			return;
 		}
+		const replyToMessageId = isGroupChat(ctx)
+			? ctx.message?.message_id
+			: undefined;
+		const replyOptions = replyToMessageId
+			? { reply_to_message_id: replyToMessageId }
+			: undefined;
+		const cancelStatus = scheduleDelayedStatus(
+			(message) => sendText(ctx, message, replyOptions),
+			"Обрабатываю голосовое сообщение…",
+			2000,
+		);
 		try {
-			await ctx.replyWithChatAction("typing");
 			if (!isGroupAllowed(ctx)) {
+				cancelStatus();
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 				if (shouldReplyAccessDenied(ctx)) {
 					await sendText(ctx, "Доступ запрещен.");
@@ -1108,18 +1333,21 @@ export async function createBot(options: CreateBotOptions) {
 			) {
 				const allowReply = isReplyToBotWithoutMention(ctx);
 				if (!allowReply && !isBotMentioned(ctx)) {
+					cancelStatus();
 					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 					return;
 				}
 			}
 			const file = await ctx.api.getFile(voice.file_id);
 			if (!file.file_path) {
+				cancelStatus();
 				await sendText(ctx, "Не удалось получить файл голосового сообщения.");
 				return;
 			}
 			const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 			const response = await fetch(downloadUrl);
 			if (!response.ok) {
+				cancelStatus();
 				throw new Error(`audio_download_failed:${response.status}`);
 			}
 			const audio = new Uint8Array(await response.arrayBuffer());
@@ -1129,12 +1357,15 @@ export async function createBot(options: CreateBotOptions) {
 			});
 			const text = transcript.text?.trim() ?? "";
 			if (!text) {
+				cancelStatus();
 				await sendText(ctx, "Не удалось распознать речь в сообщении.");
 				return;
 			}
+			cancelStatus();
 			logDebug("voice transcript", { length: text.length });
 			await handleIncomingText(ctx, text);
 		} catch (error) {
+			cancelStatus();
 			logDebug("voice transcription error", { error: String(error) });
 			setLogError(ctx, error);
 			await sendText(ctx, `Ошибка: ${String(error)}`);
@@ -1146,6 +1377,7 @@ export async function createBot(options: CreateBotOptions) {
 		rawText: string,
 		files: FilePart[] = [],
 		webSearchEnabled?: boolean,
+		skipFileStatus?: boolean,
 	) {
 		const text = rawText.trim();
 		if (
@@ -1161,7 +1393,27 @@ export async function createBot(options: CreateBotOptions) {
 			? { reply_to_message_id: replyToMessageId }
 			: undefined;
 		const sendReply = (message: string) => sendText(ctx, message, replyOptions);
-		const { onToolStep, clearAllStatuses } = createToolStatusHandler(sendReply);
+		const { onToolStart, onToolStep, clearAllStatuses } =
+			createToolStatusHandler(sendReply);
+		let stopTyping: (() => void) | null = null;
+		let cancelFileStatus: (() => void) | null = null;
+		let processingTimer: ReturnType<typeof setTimeout> | null = null;
+		const cancelProcessing = () => {
+			if (processingTimer) {
+				clearTimeout(processingTimer);
+				processingTimer = null;
+			}
+		};
+		const scheduleProcessing = () => {
+			if (processingTimer) return;
+			processingTimer = setTimeout(() => {
+				void sendReply("Готовлю ответ…");
+			}, 9000);
+		};
+		const handleToolStep = (toolNames: string[]) => {
+			cancelProcessing();
+			onToolStep?.(toolNames);
+		};
 
 		try {
 			await ctx.replyWithChatAction("typing");
@@ -1185,12 +1437,18 @@ export async function createBot(options: CreateBotOptions) {
 					return;
 				}
 			}
+			stopTyping = startTypingHeartbeat(ctx);
+			scheduleProcessing();
 			const chatId = ctx.chat?.id?.toString() ?? "";
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
 			const promptText =
 				text || (files.length > 0 ? "Analyze the attached file." : text);
+			cancelFileStatus =
+				!skipFileStatus && files.length > 0
+					? scheduleDelayedStatus(sendReply, "Обрабатываю файл…", 2000)
+					: null;
 			const allowWebSearch =
 				typeof webSearchEnabled === "boolean"
 					? webSearchEnabled
@@ -1216,9 +1474,17 @@ export async function createBot(options: CreateBotOptions) {
 				? formatHistoryForPrompt(historyMessages)
 				: "";
 			const sprintQuery = isSprintQuery(promptText);
-			const issueKeys = sprintQuery
-				? extractExplicitIssueKeys(promptText)
-				: extractIssueKeysFromText(promptText, DEFAULT_ISSUE_PREFIX);
+			const jiraKeysFromUrl = extractJiraIssueKeysFromUrls(promptText);
+			const trackerKeysFromUrl = extractTrackerIssueKeysFromUrls(promptText);
+			const urlIssueKeys = [...jiraKeysFromUrl, ...trackerKeysFromUrl];
+			const issueKeys =
+				hasFigmaUrl(promptText) && urlIssueKeys.length === 0
+					? []
+					: urlIssueKeys.length > 0
+						? urlIssueKeys
+						: sprintQuery
+							? extractExplicitIssueKeys(promptText)
+							: extractIssueKeysFromText(promptText, DEFAULT_ISSUE_PREFIX);
 			setLogContext(ctx, {
 				issue_key_count: issueKeys.length,
 				issue_key: issueKeys[0],
@@ -1266,6 +1532,7 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
+							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -1360,6 +1627,7 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
+							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -1453,6 +1721,7 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
+							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -1541,6 +1810,7 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
+							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -1651,11 +1921,16 @@ export async function createBot(options: CreateBotOptions) {
 						history: mergedHistory,
 						chatId: memoryId,
 						userName,
-						onToolStep,
+						onToolStart: (toolName) => {
+							cancelProcessing();
+							onToolStart?.(toolName);
+						},
+						onToolStep: handleToolStep,
 						ctx,
 						webSearchEnabled: allowWebSearch,
 					});
 					const result = await generateAgent(agent);
+					cancelProcessing();
 					clearAllStatuses();
 					if (DEBUG_LOGS) {
 						const steps =
@@ -1716,9 +1991,15 @@ export async function createBot(options: CreateBotOptions) {
 			setLogError(ctx, lastError ?? "unknown_error");
 			await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
 		} catch (error) {
+			cancelProcessing();
 			clearAllStatuses();
 			setLogError(ctx, error);
 			await sendReply(`Ошибка: ${String(error)}`);
+		} finally {
+			cancelProcessing();
+			clearAllStatuses();
+			cancelFileStatus?.();
+			stopTyping?.();
 		}
 	}
 
@@ -1781,9 +2062,17 @@ export async function createBot(options: CreateBotOptions) {
 				? formatHistoryForPrompt(historyMessages)
 				: "";
 			const sprintQuery = isSprintQuery(promptText);
-			const issueKeys = sprintQuery
-				? extractExplicitIssueKeys(promptText)
-				: extractIssueKeysFromText(promptText, DEFAULT_ISSUE_PREFIX);
+			const jiraKeysFromUrl = extractJiraIssueKeysFromUrls(promptText);
+			const trackerKeysFromUrl = extractTrackerIssueKeysFromUrls(promptText);
+			const urlIssueKeys = [...jiraKeysFromUrl, ...trackerKeysFromUrl];
+			const issueKeys =
+				hasFigmaUrl(promptText) && urlIssueKeys.length === 0
+					? []
+					: urlIssueKeys.length > 0
+						? urlIssueKeys
+						: sprintQuery
+							? extractExplicitIssueKeys(promptText)
+							: extractIssueKeysFromText(promptText, DEFAULT_ISSUE_PREFIX);
 			setLogContext(ctx, {
 				issue_key_count: issueKeys.length,
 				issue_key: issueKeys[0],

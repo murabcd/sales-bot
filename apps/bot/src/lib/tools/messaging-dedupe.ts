@@ -1,11 +1,18 @@
+import { regex } from "arkregex";
+
 const MIN_DUPLICATE_TEXT_LENGTH = 10;
+const EMOJI_RE = regex(
+	"\\p{Emoji_Presentation}|\\p{Extended_Pictographic}",
+	"gu",
+);
+const SPACE_RE = regex("\\s+", "g");
 
 export function normalizeTextForComparison(text: string): string {
 	return text
 		.trim()
 		.toLowerCase()
-		.replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
-		.replace(/\s+/g, " ")
+		.replace(EMOJI_RE, "")
+		.replace(SPACE_RE, " ")
 		.trim();
 }
 

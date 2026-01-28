@@ -1,3 +1,4 @@
+import { regex } from "arkregex";
 import type { Bot, InlineKeyboard } from "grammy";
 import type { ModelsFile } from "../../models-core.js";
 import type { RuntimeSkill } from "../../skills-core.js";
@@ -86,9 +87,14 @@ type CommandDeps = {
 	formatUptime: (seconds: number) => string;
 	getUptimeSeconds?: () => number;
 	getLastTrackerCallAt: () => number | null;
+	jiraEnabled?: boolean;
+	posthogEnabled?: boolean;
+	webSearchEnabled?: boolean;
+	memoryEnabled?: boolean;
 };
 
 export function registerCommands(deps: CommandDeps) {
+	const HELP_STATUS_CMD_RE = regex("^cmd:(help|status)$");
 	const {
 		bot,
 		startGreeting,
@@ -132,7 +138,10 @@ export function registerCommands(deps: CommandDeps) {
 		trackerHealthCheck,
 		formatUptime,
 		getUptimeSeconds,
-		getLastTrackerCallAt,
+		jiraEnabled,
+		posthogEnabled,
+		webSearchEnabled,
+		memoryEnabled,
 	} = deps;
 
 	bot.command("start", (ctx) => {
@@ -150,15 +159,14 @@ export function registerCommands(deps: CommandDeps) {
 		await sendText(
 			ctx,
 			"Команды:\n" +
-				"/tools - показать доступные инструменты\n" +
-				"/model - показать или сменить модель (list — список, set — выбрать)\n" +
-				"/model list - показать список моделей\n" +
-				"/model set <ref> - выбрать модель по имени\n" +
-				"/model reasoning <level> - установить уровень логики ответа (off/low/standard/high)\n" +
-				"/whoami - кто такой бот\n" +
-				"/tracker <tool> <json> - вручную вызвать инструмент с параметрами (для продвинутых)\n\n" +
-				"Можно просто спросить, например:\n" +
-				'"Делали интеграцию с ЦИАН?"',
+				"— /start — начать сначала\n" +
+				"— /status — проверить работу бота\n" +
+				"— /help — эта справка\n\n" +
+				"Просто спросите, например:\n" +
+				'"Какой статус у PROJ-1234? в Tracker"\n' +
+				'"Дай топ-5 компаний активных в чатботах из Posthog?"\n' +
+				'"Есть ли блокеры в текущем спринте в Jira?"\n' +
+				'"Найди в интернете ближайшие HR-конференции в РФ"',
 		);
 	}
 
@@ -452,28 +460,23 @@ export function registerCommands(deps: CommandDeps) {
 		const uptimeSeconds = getUptimeSeconds?.() ?? 0;
 		const uptime = formatUptime(uptimeSeconds);
 		let trackerStatus = "ok";
-		let trackerInfo = "";
 		try {
 			await withTimeout(trackerHealthCheck(), 5_000, "trackerHealthCheck");
-			trackerInfo = "ok";
 		} catch (error) {
-			trackerStatus = "error";
-			trackerInfo = String(error);
+			trackerStatus = `error: ${String(error)}`;
 		}
 
-		const lastCall = getLastTrackerCallAt()
-			? new Date(getLastTrackerCallAt() ?? 0).toISOString()
-			: "n/a";
-		await sendText(
-			ctx,
-			[
-				"Status:",
-				`uptime: ${uptime}`,
-				`model: ${getActiveModelRef()}`,
-				`tracker: ${trackerStatus} (${trackerInfo})`,
-				`last_tracker_call: ${lastCall}`,
-			].join("\n"),
-		);
+		const lines = [
+			"Статус:",
+			`— аптайм: ${uptime}`,
+			`— модель: ${getActiveModelRef()}`,
+			`— tracker: ${trackerStatus}`,
+			`— jira: ${jiraEnabled ? "ok" : "не настроен"}`,
+			`— posthog: ${posthogEnabled ? "ok" : "не настроен"}`,
+			`— веб-поиск: ${webSearchEnabled ? "включён" : "выключен"}`,
+			`— память: ${memoryEnabled ? "ok" : "не настроена"}`,
+		];
+		await sendText(ctx, lines.join("\n"));
 	}
 
 	bot.command("status", (ctx) => {
@@ -483,7 +486,10 @@ export function registerCommands(deps: CommandDeps) {
 
 	bot.command("whoami", (ctx) => {
 		setLogContext(ctx, { command: "/whoami", message_type: "command" });
-		return sendText(ctx, "Я Omni, ассистент по Yandex Tracker.");
+		return sendText(
+			ctx,
+			"Я Omni, персональный ассистент для задач, аналитики и поиска информации.",
+		);
 	});
 
 	async function safeAnswerCallback(ctx: {
@@ -512,7 +518,7 @@ export function registerCommands(deps: CommandDeps) {
 		}
 	}
 
-	bot.callbackQuery(/^cmd:(help|status)$/, async (ctx) => {
+	bot.callbackQuery(HELP_STATUS_CMD_RE, async (ctx) => {
 		setLogContext(ctx, { message_type: "callback" });
 		await safeAnswerCallback(ctx);
 		const command = ctx.match?.[1];

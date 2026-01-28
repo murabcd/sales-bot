@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
 
+import { regex } from "arkregex";
+
+const TOOL_ID_SANITIZE_RE = regex("[^a-zA-Z0-9_-]", "g");
+const TOOL_ID_TRIM_RE = regex("^[^a-zA-Z0-9_-]+");
+
 export function sanitizeToolCallId(id: string): string {
 	if (!id || typeof id !== "string") return "default_tool_id";
-	const replaced = id.replace(/[^a-zA-Z0-9_-]/g, "_");
-	const trimmed = replaced.replace(/^[^a-zA-Z0-9_-]+/, "");
+	const replaced = id.replace(TOOL_ID_SANITIZE_RE, "_");
+	const trimmed = replaced.replace(TOOL_ID_TRIM_RE, "");
 	return trimmed.length > 0 ? trimmed : "sanitized_tool_id";
 }
 

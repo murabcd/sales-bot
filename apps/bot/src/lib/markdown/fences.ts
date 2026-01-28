@@ -1,3 +1,7 @@
+import { regex } from "arkregex";
+
+const FENCE_RE = regex("^( {0,3})(`{3,}|~{3,})(.*)$");
+
 export type FenceSpan = {
 	start: number;
 	end: number;
@@ -25,7 +29,7 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
 		const lineEnd = nextNewline === -1 ? buffer.length : nextNewline;
 		const line = buffer.slice(offset, lineEnd);
 
-		const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+		const match = line.match(FENCE_RE);
 		if (match) {
 			const indent = match[1];
 			const marker = match[2];

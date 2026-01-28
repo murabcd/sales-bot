@@ -4,6 +4,8 @@ export type ToolSource =
 	| "web"
 	| "memory"
 	| "tracker"
+	| "wiki"
+	| "figma"
 	| "posthog"
 	| "runtime-skill"
 	| "command"

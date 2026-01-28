@@ -1,5 +1,6 @@
 import { openai } from "@ai-sdk/openai";
 import { stepCountIs, ToolLoopAgent, type ToolSet, tool } from "ai";
+import { regex } from "arkregex";
 import { z } from "zod";
 
 export type OrchestrationAgentId =
@@ -80,6 +81,8 @@ const ROUTER_SCHEMA = z.object({
 		.optional(),
 });
 
+const ISSUE_KEY_RE = regex("\\b(?<prefix>[A-Z]{2,10})-(?<num>\\d+)\\b");
+
 function buildRouterTool() {
 	return tool({
 		description:
@@ -91,8 +94,9 @@ function buildRouterTool() {
 		execute: async ({ prompt, isGroupChat }) => {
 			const agents: Array<{ id: OrchestrationAgentId; reason: string }> = [];
 			const lower = prompt.toLowerCase();
-			const issueKeyMatch = prompt.match(/\b([A-Z]{2,10})-(\d+)\b/);
-			const issuePrefix = issueKeyMatch?.[1] ?? "";
+			const issueKeyMatch = prompt.match(ISSUE_KEY_RE);
+			const issuePrefix =
+				issueKeyMatch?.groups?.prefix ?? issueKeyMatch?.[1] ?? "";
 			const hasIssueKey = Boolean(issueKeyMatch);
 			const wantsAnalytics =
 				lower.includes("posthog") ||
