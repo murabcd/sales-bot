@@ -36,6 +36,7 @@ Core workflow:
 - Formatting and linting are enforced by Biome. Use tabs for indentation and double quotes in TS/JS.
 - Keep modules small and focused; add shared utilities in `apps/bot/src/lib/`.
 - Test files use the `*.test.ts` suffix and live under `apps/bot/tests/`.
+- Use ArkRegex (`regex(...)` from `arkregex`) instead of raw regex literals or `new RegExp()` in TypeScript code.
 
 ## Testing Guidelines
 

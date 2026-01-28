@@ -13,3 +13,6 @@ Relevant docs for this app:
 - `docs/tools/tool-policy.md` — tool visibility + conflict behavior
 - `docs/tools/jira.md` — Jira integration
 - `docs/tools/posthog.md` — PostHog integration
+- `docs/tools/wiki.md` — Yandex Wiki integration
+- `docs/tools/figma.md` — Figma integration
+- `docs/tools/google-public.md` — Public Google Docs/Sheets links

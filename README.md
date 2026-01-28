@@ -1,3 +1,4 @@
+<img alt="Modern Form Builder Built With Next.js." src="./apps/admin/public/preview/omni.png">
 <h1 align="center">Omni</h1>
 
 <p align="center">
@@ -24,6 +25,9 @@
 - [Yandex Tracker API](https://yandex.ru/support/tracker/en/)
   - Issue search, status, and comments data
   - Direct HTTP integration with OAuth token auth
+- [Yandex Wiki API](https://yandex.ru/support/wiki/en/api-ref/)
+  - Page read/write operations
+  - Direct HTTP integration with OAuth token auth
 - [Jira Cloud API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/)
   - Issue search, sprint issues, and comments data
   - Direct HTTP integration with API token auth
@@ -33,6 +37,11 @@
 - [Supermemory](https://supermemory.ai)
   - Persistent, per-user memory
   - Semantic retrieval for relevant past context
+- [Figma API](https://www.figma.com/developers/api)
+  - Read-only file metadata, nodes, comments, and project listings
+  - Personal access token auth
+- [Google Docs/Sheets (public)](https://developers.google.com/docs/api)
+  - Read public Docs/Sheets by shared link (no OAuth)
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
   - Serverless webhook hosting with global edge execution
   - Durable Objects for reliable update processing with retries
@@ -60,7 +69,9 @@ npx wrangler login
 npx wrangler secret put BOT_TOKEN --config worker/wrangler.toml
 npx wrangler secret put TRACKER_TOKEN --config worker/wrangler.toml
 npx wrangler secret put JIRA_API_TOKEN --config worker/wrangler.toml
+npx wrangler secret put WIKI_TOKEN --config worker/wrangler.toml
 npx wrangler secret put POSTHOG_PERSONAL_API_KEY --config worker/wrangler.toml
+npx wrangler secret put FIGMA_TOKEN --config worker/wrangler.toml
 npx wrangler secret put OPENAI_API_KEY --config worker/wrangler.toml
 npx wrangler secret put SUPERMEMORY_API_KEY --config worker/wrangler.toml
 ```
@@ -79,10 +90,7 @@ https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://<your-worker>.wo
 
 ## Customization
 
-Global persona and tone live in [`apps/bot/config/SOUL.md`](apps/bot/config/SOUL.md).
-The Worker bundles this file at build time into
-[`apps/bot/config/soul.json`](apps/bot/config/soul.json) and injects it into every
-prompt. Per-channel overrides are available in the Admin "Channels" screen.
+Global persona and tone live in [`apps/bot/config/SOUL.md`](apps/bot/config/SOUL.md). The Worker bundles this file at build time into [`apps/bot/config/soul.json`](apps/bot/config/soul.json) and injects it into every prompt. Per-channel overrides are available in the Admin "Channels" screen.
 
 ## Running locally
 
