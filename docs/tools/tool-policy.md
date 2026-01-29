@@ -15,6 +15,7 @@ Omni builds a tool registry at runtime and applies these rules:
 - Tool availability can be filtered by a global allow/deny policy (see Environment variables).
 - Tool availability can also be filtered by chat type using chat‑specific allow/deny lists.
 - Group chats always deny `group:web` and `group:memory` unless explicitly overridden in code.
+- The agent prompt uses the same tool list as `/tools` (there is no helper-only split); use allow/deny policies to restrict exposure.
 
 The `/tools` command shows active tools and also lists conflicts and policy‑suppressed tools.
 
