@@ -10,7 +10,7 @@ import {
 	type UIMessageChunk,
 } from "ai";
 import { regex } from "arkregex";
-import { API_CONSTANTS, Bot, InlineKeyboard } from "grammy";
+import { API_CONSTANTS, Bot, InlineKeyboard, InputFile } from "grammy";
 import {
 	type AgentToolCall,
 	type AgentToolResult,
@@ -32,6 +32,14 @@ import {
 	buildTrackerTools,
 	buildWebTools,
 } from "./lib/agents/subagents/index.js";
+import {
+	type AttachmentCandidate,
+	buildAttachmentPrompt,
+	extractGoogleLinks,
+	isSupportedAttachment,
+	normalizeTrackerAttachment,
+	parseConsent,
+} from "./lib/attachments.js";
 import { createAccessHelpers, isGroupChat } from "./lib/bot/access.js";
 import { registerCommands } from "./lib/bot/commands.js";
 import {
@@ -55,7 +63,10 @@ import {
 } from "./lib/clients/tracker.js";
 import { createWikiClient } from "./lib/clients/wiki.js";
 import { type BotEnv, loadBotEnv } from "./lib/config/env.js";
-import { getChatState } from "./lib/context/chat-state.js";
+import {
+	getChatState,
+	type PendingAttachmentRequest,
+} from "./lib/context/chat-state.js";
 import {
 	appendHistoryMessage,
 	clearHistoryMessages,
@@ -63,7 +74,13 @@ import {
 	loadHistoryMessages,
 	setSupermemoryConfig,
 } from "./lib/context/session-history.js";
-import { type FilePart, isPdfDocument, toFilePart } from "./lib/files.js";
+import {
+	type FilePart,
+	isDocxDocument,
+	isPdfDocument,
+	toFilePart,
+} from "./lib/files.js";
+import type { ImageStore } from "./lib/image-store.js";
 import { type ImageFilePart, toImageFilePart } from "./lib/images.js";
 import { normalizeJiraIssue } from "./lib/jira.js";
 import { createLogger } from "./lib/logger.js";
@@ -71,7 +88,10 @@ import {
 	filterPosthogTools,
 	POSTHOG_READONLY_TOOL_NAMES,
 } from "./lib/posthog-tools.js";
-import { extractIssueKeysFromText } from "./lib/text/normalize.js";
+import {
+	extractIssueKeysFromText,
+	truncateText,
+} from "./lib/text/normalize.js";
 import { createToolStatusHandler } from "./lib/tool-status.js";
 import { parseSenderToolAccess } from "./lib/tools/access.js";
 import {
@@ -120,6 +140,7 @@ export type CreateBotOptions = {
 	runtimeSkills?: RuntimeSkill[];
 	getUptimeSeconds?: () => number;
 	onDebugLog?: (line: string) => void;
+	imageStore?: ImageStore;
 	cronClient?: {
 		list: (params?: {
 			includeDisabled?: boolean;
@@ -152,6 +173,7 @@ export async function createBot(options: CreateBotOptions) {
 		POSTHOG_PERSONAL_API_KEY,
 		POSTHOG_API_BASE_URL,
 		OPENAI_API_KEY,
+		GEMINI_API_KEY,
 		OPENAI_MODEL,
 		SOUL_PROMPT,
 		ALLOWED_TG_IDS,
@@ -174,6 +196,7 @@ export async function createBot(options: CreateBotOptions) {
 		TELEGRAM_GROUP_REQUIRE_MENTION,
 		IMAGE_MAX_BYTES,
 		DOCUMENT_MAX_BYTES,
+		ATTACHMENT_MAX_BYTES,
 		WEB_SEARCH_ENABLED,
 		WEB_SEARCH_CONTEXT_SIZE,
 		TOOL_RATE_LIMITS,
@@ -201,6 +224,8 @@ export async function createBot(options: CreateBotOptions) {
 		REGION,
 		INSTANCE_ID,
 	} = envConfig;
+	const ATTACHMENT_MAX_COUNT = 3;
+	const ATTACHMENT_CONSENT_TTL_MS = 10 * 60 * 1000;
 	const toolPolicies = parseToolPolicyVariants(env);
 	const toolPolicy = toolPolicies.base;
 	const toolPolicyDm = toolPolicies.dm;
@@ -328,8 +353,26 @@ export async function createBot(options: CreateBotOptions) {
 
 		register(
 			{
-				name: "tracker_search",
+				name: "yandex_tracker_search",
 				description: `Search Yandex Tracker issues in queue ${DEFAULT_TRACKER_QUEUE} using keywords from the question.`,
+				source: "tracker",
+				origin: "core",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "yandex_tracker_find_issue",
+				description: "Find the best matching Yandex Tracker issues.",
+				source: "tracker",
+				origin: "core",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "yandex_tracker_issue_summary",
+				description: "Summarize a Yandex Tracker issue by key.",
 				source: "tracker",
 				origin: "core",
 			},
@@ -404,6 +447,42 @@ export async function createBot(options: CreateBotOptions) {
 		}
 
 		if (WIKI_TOKEN) {
+			register(
+				{
+					name: "yandex_wiki_find_page",
+					description: "Resolve a Yandex Wiki page by URL, slug, or id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "yandex_wiki_read_page",
+					description: "Read a Yandex Wiki page by URL, slug, or id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "yandex_wiki_update_page",
+					description: "Update a Yandex Wiki page by id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "yandex_wiki_append_page",
+					description: "Append content to a Yandex Wiki page by id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				agentTools,
+			);
 			register(
 				{
 					name: "wiki_page_get",
@@ -490,6 +569,19 @@ export async function createBot(options: CreateBotOptions) {
 						"Search the web for up-to-date information (OpenAI web_search).",
 					source: "web",
 					origin: "openai",
+				},
+				agentTools,
+			);
+		}
+
+		if (GEMINI_API_KEY) {
+			register(
+				{
+					name: "gemini_image_generate",
+					description:
+						"Generate images with Gemini 3 Pro Image Preview (Google).",
+					source: "core",
+					origin: "gemini",
 				},
 				agentTools,
 			);
@@ -669,8 +761,12 @@ export async function createBot(options: CreateBotOptions) {
 		setLogContext,
 		logDebug,
 	});
-	const { trackerCallTool, trackerHealthCheck, getLastTrackerCallAt } =
-		trackerClient;
+	const {
+		trackerCallTool,
+		trackerHealthCheck,
+		getLastTrackerCallAt,
+		downloadAttachment,
+	} = trackerClient;
 
 	const wikiClient = createWikiClient({
 		token: WIKI_TOKEN ?? "",
@@ -878,6 +974,7 @@ export async function createBot(options: CreateBotOptions) {
 		figmaEnabled,
 		posthogPersonalApiKey: POSTHOG_PERSONAL_API_KEY,
 		getPosthogTools,
+		geminiApiKey: GEMINI_API_KEY ?? "",
 		cronClient,
 		trackerClient,
 		wikiClient,
@@ -888,6 +985,7 @@ export async function createBot(options: CreateBotOptions) {
 		supermemoryProjectId: SUPERMEMORY_PROJECT_ID,
 		supermemoryTagPrefix: SUPERMEMORY_TAG_PREFIX,
 		commentsFetchBudgetMs: COMMENTS_FETCH_BUDGET_MS,
+		imageStore: options.imageStore,
 	});
 
 	const createAgent = createAgentFactory({
@@ -1138,6 +1236,125 @@ export async function createBot(options: CreateBotOptions) {
 				filename,
 			}),
 		];
+	}
+
+	async function readGoogleDoc(url: string) {
+		const parsed = new URL(url);
+		if (!parsed.hostname.endsWith("docs.google.com")) {
+			throw new Error("unsupported_host");
+		}
+		const path = parsed.pathname;
+		if (path.includes("/document/d/")) {
+			const id = path.split("/document/d/")[1]?.split("/")[0];
+			if (!id) throw new Error("missing_doc_id");
+			const exportUrl = `https://docs.google.com/document/d/${id}/export?format=txt`;
+			const response = await fetch(exportUrl);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new Error(
+					`doc_fetch_error:${response.status}:${response.statusText}:${body}`,
+				);
+			}
+			const text = await response.text();
+			return { type: "doc", id, text };
+		}
+		if (path.includes("/spreadsheets/d/")) {
+			const id = path.split("/spreadsheets/d/")[1]?.split("/")[0];
+			if (!id) throw new Error("missing_sheet_id");
+			const gid =
+				parsed.searchParams.get("gid") ??
+				parsed.hash.replace("#gid=", "").trim() ??
+				"0";
+			const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
+			const response = await fetch(exportUrl);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new Error(
+					`sheet_fetch_error:${response.status}:${response.statusText}:${body}`,
+				);
+			}
+			const text = await response.text();
+			return { type: "sheet", id, text };
+		}
+		throw new Error("unsupported_google_doc");
+	}
+
+	async function convertDocxToText(buffer: Uint8Array) {
+		const mammoth = await import("mammoth");
+		const result = await mammoth.extractRawText({
+			buffer: Buffer.from(buffer),
+		});
+		return result.value ?? "";
+	}
+
+	async function collectAttachmentRequest(params: {
+		issueKey: string;
+		question: string;
+		issueText: string;
+		commentsText: string;
+		ctx: BotContext;
+	}): Promise<PendingAttachmentRequest | null> {
+		let attachmentsResult: unknown = [];
+		try {
+			attachmentsResult = await trackerCallTool(
+				"issue_get_attachments",
+				{ issue_id: params.issueKey },
+				8_000,
+				params.ctx,
+			);
+		} catch (error) {
+			logDebug("issue_get_attachments error", {
+				issueKey: params.issueKey,
+				error: String(error),
+			});
+		}
+		const attachmentsRaw = Array.isArray(attachmentsResult)
+			? (attachmentsResult as Array<Record<string, unknown>>)
+			: [];
+		const attachments = attachmentsRaw
+			.map(normalizeTrackerAttachment)
+			.filter((item): item is AttachmentCandidate => Boolean(item))
+			.filter((item) => isSupportedAttachment(item))
+			.slice(0, ATTACHMENT_MAX_COUNT);
+
+		const googleLinks = extractGoogleLinks(
+			`${params.issueText}\n${params.commentsText}`,
+		).slice(0, ATTACHMENT_MAX_COUNT);
+
+		if (attachments.length === 0 && googleLinks.length === 0) return null;
+		return {
+			issueKey: params.issueKey,
+			question: params.question,
+			attachments,
+			googleLinks,
+			createdAt: Date.now(),
+		};
+	}
+
+	async function sendAttachmentFiles(params: {
+		ctx: BotContext;
+		files: Array<{
+			buffer: Uint8Array;
+			filename: string;
+			mimeType: string;
+		}>;
+		replyToMessageId?: number;
+	}) {
+		if (!params.ctx.chat?.id) return;
+		if (!("api" in params.ctx) || !params.ctx.api?.sendDocument) return;
+		for (const file of params.files) {
+			try {
+				await params.ctx.api.sendDocument(
+					params.ctx.chat.id,
+					new InputFile(file.buffer, file.filename),
+					params.replyToMessageId
+						? { reply_to_message_id: params.replyToMessageId }
+						: undefined,
+				);
+			} catch (error) {
+				logDebug("send attachment failed", { error: String(error) });
+			}
+		}
 	}
 
 	type LocalChatOptions = {
@@ -1445,6 +1662,223 @@ export async function createBot(options: CreateBotOptions) {
 			const chatState = chatId ? getChatState(chatId) : null;
 			const promptText =
 				text || (files.length > 0 ? "Analyze the attached file." : text);
+			const generateAgentWithFiles = async (
+				agent: ToolLoopAgent,
+				prompt: string,
+				agentFiles: FilePart[],
+			) => {
+				if (agentFiles.length === 0) {
+					return agent.generate({ prompt });
+				}
+				const messages = await convertToModelMessages([
+					buildUserUIMessage(prompt, agentFiles),
+				]);
+				return agent.generate({ messages });
+			};
+
+			const pendingRequest = chatState?.pendingAttachmentRequest;
+			if (pendingRequest) {
+				const age = Date.now() - pendingRequest.createdAt;
+				if (age > ATTACHMENT_CONSENT_TTL_MS && chatState) {
+					chatState.pendingAttachmentRequest = undefined;
+				} else {
+					const consent = parseConsent(text);
+					if (consent) {
+						if (chatState) {
+							chatState.pendingAttachmentRequest = undefined;
+						}
+						if (consent === "no") {
+							cancelProcessing();
+							clearAllStatuses();
+							await sendReply("Ок, без вложений.");
+							return;
+						}
+						cancelProcessing();
+						clearAllStatuses();
+						await sendReply("Ок, читаю материалы…");
+						try {
+							const [issueResult, commentResult] = await Promise.all([
+								trackerCallTool(
+									"issue_get",
+									{ issue_id: pendingRequest.issueKey },
+									8_000,
+									ctx,
+								),
+								trackerCallTool(
+									"issue_get_comments",
+									{ issue_id: pendingRequest.issueKey },
+									8_000,
+									ctx,
+								),
+							]);
+							const issueText = formatToolResult(issueResult);
+							const commentsText = extractCommentsText(commentResult).text;
+							const extraContextParts: string[] = [];
+							const fileParts: FilePart[] = [];
+							const sendFiles: Array<{
+								buffer: Uint8Array;
+								filename: string;
+								mimeType: string;
+							}> = [];
+							const skippedReads: string[] = [];
+							const readErrors: string[] = [];
+
+							for (const link of pendingRequest.googleLinks) {
+								try {
+									const doc = await readGoogleDoc(link);
+									const truncated = truncateText(doc.text, 8000);
+									extraContextParts.push(
+										`Google ${doc.type} (${link}):\n${truncated}`,
+									);
+								} catch (error) {
+									readErrors.push(`${link} (${String(error)})`);
+								}
+							}
+
+							for (const attachment of pendingRequest.attachments) {
+								try {
+									const downloaded = await downloadAttachment(
+										attachment.id,
+										15_000,
+									);
+									const filename = downloaded.filename ?? attachment.filename;
+									const mimeType =
+										downloaded.contentType ?? attachment.mimeType;
+									sendFiles.push({
+										buffer: downloaded.buffer,
+										filename,
+										mimeType,
+									});
+
+									if (downloaded.buffer.byteLength > ATTACHMENT_MAX_BYTES) {
+										skippedReads.push(filename);
+										continue;
+									}
+									if (
+										isPdfDocument({ mimeType, fileName: filename }) &&
+										downloaded.buffer.byteLength > 0
+									) {
+										fileParts.push(
+											toFilePart({
+												buffer: downloaded.buffer,
+												mediaType: "application/pdf",
+												filename,
+											}),
+										);
+										continue;
+									}
+									if (isDocxDocument({ mimeType, fileName: filename })) {
+										const text = await convertDocxToText(downloaded.buffer);
+										const truncated = truncateText(text, 8000);
+										extraContextParts.push(`DOCX (${filename}):\n${truncated}`);
+									}
+								} catch (error) {
+									readErrors.push(`${attachment.filename} (${String(error)})`);
+								}
+							}
+
+							const extraContext =
+								extraContextParts.length > 0
+									? extraContextParts.join("\n\n")
+									: undefined;
+
+							const modelRefs = [
+								activeModelRef,
+								...activeModelFallbacks.filter((ref) => ref !== activeModelRef),
+							];
+							let lastError: unknown = null;
+							for (const ref of modelRefs) {
+								const config = getModelConfig(ref);
+								if (!config) {
+									logDebug("model missing", { ref });
+									continue;
+								}
+								try {
+									setLogContext(ctx, { model_ref: ref, model_id: config.id });
+									const agent = await createIssueAgent({
+										question: pendingRequest.question,
+										modelRef: ref,
+										modelName: config.label ?? config.id,
+										reasoning: resolveReasoningFor(config),
+										modelId: config.id,
+										issueKey: pendingRequest.issueKey,
+										issueText,
+										commentsText,
+										extraContext,
+										userName,
+										globalSoul: SOUL_PROMPT,
+										channelSoul: ctx.state.channelConfig?.systemPrompt,
+									});
+									const result = await generateAgentWithFiles(
+										agent,
+										pendingRequest.question,
+										fileParts,
+									);
+									const replyText = result.text?.trim();
+									const sources = (
+										result as { sources?: Array<{ url?: string }> }
+									).sources;
+									const reply = replyText
+										? appendSources(replyText, sources)
+										: replyText;
+									if (!reply) {
+										lastError = new Error("empty_response");
+										continue;
+									}
+									if (memoryId) {
+										void appendHistoryMessage(memoryId, {
+											timestamp: new Date().toISOString(),
+											role: "user",
+											text: pendingRequest.question,
+										});
+										void appendHistoryMessage(memoryId, {
+											timestamp: new Date().toISOString(),
+											role: "assistant",
+											text: reply,
+										});
+									}
+									await sendReply(reply);
+									if (skippedReads.length > 0) {
+										await sendReply(
+											`Некоторые файлы слишком большие для чтения: ${skippedReads.join(
+												", ",
+											)}.`,
+										);
+									}
+									if (readErrors.length > 0) {
+										await sendReply(
+											`Не удалось прочитать часть материалов: ${readErrors.join(
+												", ",
+											)}.`,
+										);
+									}
+									await sendAttachmentFiles({
+										ctx,
+										files: sendFiles,
+										replyToMessageId,
+									});
+									return;
+								} catch (error) {
+									lastError = error;
+									logDebug("issue agent error", {
+										ref,
+										error: String(error),
+									});
+								}
+							}
+							setLogError(ctx, lastError ?? "unknown_error");
+							await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
+							return;
+						} catch (error) {
+							setLogError(ctx, error);
+							await sendReply(`Ошибка: ${String(error)}`);
+							return;
+						}
+					} else if (chatState && text) {
+						chatState.pendingAttachmentRequest = undefined;
+					}
+				}
+			}
 			cancelFileStatus =
 				!skipFileStatus && files.length > 0
 					? scheduleDelayedStatus(sendReply, "Обрабатываю файл…", 2000)
@@ -1453,15 +1887,8 @@ export async function createBot(options: CreateBotOptions) {
 				typeof webSearchEnabled === "boolean"
 					? webSearchEnabled
 					: WEB_SEARCH_ENABLED;
-			const generateAgent = async (agent: ToolLoopAgent) => {
-				if (files.length === 0) {
-					return agent.generate({ prompt: promptText });
-				}
-				const messages = await convertToModelMessages([
-					buildUserUIMessage(promptText, files),
-				]);
-				return agent.generate({ messages });
-			};
+			const generateAgent = async (agent: ToolLoopAgent) =>
+				generateAgentWithFiles(agent, promptText, files);
 			const historyMessages =
 				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
 					? await loadHistoryMessages(
@@ -1553,6 +1980,10 @@ export async function createBot(options: CreateBotOptions) {
 								chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
 								chatState.lastUpdatedAt = Date.now();
 							}
+							const primaryIssue = issuesData[0];
+							const issueKey = primaryIssue?.key ?? null;
+							const issueText = primaryIssue?.issueText ?? "";
+							const commentsText = primaryIssue?.commentsText ?? "";
 							if (memoryId) {
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
@@ -1566,6 +1997,19 @@ export async function createBot(options: CreateBotOptions) {
 								});
 							}
 							await sendReply(reply);
+							if (chatState) {
+								const request = await collectAttachmentRequest({
+									issueKey,
+									question: promptText,
+									issueText,
+									commentsText,
+									ctx,
+								});
+								if (request) {
+									chatState.pendingAttachmentRequest = request;
+									await sendReply(buildAttachmentPrompt(request));
+								}
+							}
 							return;
 						} catch (error) {
 							lastError = error;

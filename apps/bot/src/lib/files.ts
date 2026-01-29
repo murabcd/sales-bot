@@ -13,6 +13,20 @@ export function isPdfDocument(params: {
 	return params.fileName?.toLowerCase().endsWith(".pdf") ?? false;
 }
 
+export function isDocxDocument(params: {
+	mimeType?: string | null;
+	fileName?: string | null;
+}): boolean {
+	const mimeType = params.mimeType?.toLowerCase();
+	if (
+		mimeType ===
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	) {
+		return true;
+	}
+	return params.fileName?.toLowerCase().endsWith(".docx") ?? false;
+}
+
 export function toFilePart(params: {
 	buffer: Uint8Array | ArrayBuffer;
 	mediaType: string;

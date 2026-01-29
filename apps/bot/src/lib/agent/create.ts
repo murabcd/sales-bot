@@ -1,8 +1,11 @@
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { supermemoryTools } from "@supermemory/tools/ai-sdk";
 import {
 	createAgentUIStream,
 	createUIMessageStream,
+	generateText,
+	type LanguageModel,
 	type ModelMessage,
 	stepCountIs,
 	ToolLoopAgent,
@@ -34,7 +37,8 @@ import {
 	rankIssues,
 } from "../clients/tracker.js";
 import type { WikiClient } from "../clients/wiki.js";
-import type { FilePart } from "../files.js";
+import { type FilePart, toFilePart } from "../files.js";
+import type { ImageStore } from "../image-store.js";
 import { buildJiraJql, normalizeJiraIssue } from "../jira.js";
 import { buildAgentInstructions } from "../prompts/agent-instructions.js";
 import { extractKeywords } from "../text/normalize.js";
@@ -63,6 +67,52 @@ export type AgentToolCall = TypedToolCall<AgentToolSet>;
 export type AgentToolResult = TypedToolResult<AgentToolSet>;
 
 export type ToolConflictLogger = (event: ToolConflictLog) => void;
+
+const GEMINI_IMAGE_MODEL_ID = "gemini-3-pro-image-preview";
+const GEMINI_IMAGE_ASPECT_RATIOS = [
+	"1:1",
+	"2:3",
+	"3:2",
+	"3:4",
+	"4:3",
+	"4:5",
+	"5:4",
+	"9:16",
+	"16:9",
+] as const;
+
+const WIKI_NUMERIC_ID_RE = regex("^\\d+$");
+const WIKI_PATH_LEADING_SLASH_RE = regex("^/+");
+const WIKI_PATH_TRAILING_SLASH_RE = regex("/+$");
+
+function resolveImageExtension(mediaType: string): string {
+	switch (mediaType) {
+		case "image/jpeg":
+			return "jpg";
+		case "image/png":
+			return "png";
+		case "image/webp":
+			return "webp";
+		case "image/gif":
+			return "gif";
+		default:
+			return "png";
+	}
+}
+
+function decodeBase64Payload(base64: string): Uint8Array | null {
+	const trimmed = base64.trim();
+	if (!trimmed) return null;
+	const payload = trimmed.startsWith("data:")
+		? trimmed.slice(trimmed.indexOf(",") + 1)
+		: trimmed;
+	if (!payload) return null;
+	try {
+		return new Uint8Array(Buffer.from(payload, "base64"));
+	} catch {
+		return null;
+	}
+}
 
 type Logger = {
 	info: (payload: Record<string, unknown>) => void;
@@ -118,6 +168,7 @@ export type AgentToolsDeps = {
 	figmaEnabled: boolean;
 	posthogPersonalApiKey: string;
 	getPosthogTools: () => Promise<ToolSet>;
+	geminiApiKey: string;
 	cronClient?: {
 		list: (params?: {
 			includeDisabled?: boolean;
@@ -141,6 +192,7 @@ export type AgentToolsDeps = {
 	supermemoryProjectId: string;
 	supermemoryTagPrefix: string;
 	commentsFetchBudgetMs: number;
+	imageStore?: ImageStore;
 };
 
 export type AgentModelConfig = ModelConfig;
@@ -175,6 +227,15 @@ function resolveWebSearchContextSize(value: string): "low" | "medium" | "high" {
 const FIGMA_PATH_RE = regex("/(file|design)/([^/]+)");
 const DOC_PATH_RE = regex("/document/d/([^/]+)");
 const SHEET_PATH_RE = regex("/spreadsheets/d/([^/]+)");
+const WIKI_URL_RE = regex.as("https?://[^\\s]+", "i");
+
+type TrackerSearchPayload = {
+	issues: Array<Record<string, unknown>>;
+	scores: Array<{ key: string | null; score: number }>;
+	comments: Record<string, { text: string; truncated: boolean }>;
+	ambiguous: boolean;
+	candidates: Array<{ key: string | null; summary: string; score: number }>;
+};
 
 function extractFigmaFileKey(input: string): string | null {
 	try {
@@ -197,6 +258,29 @@ function extractFigmaNodeId(input: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+function parseWikiReference(input: string): { id?: number; slug?: string } {
+	const trimmed = input.trim();
+	if (!trimmed) return {};
+	if (WIKI_NUMERIC_ID_RE.test(trimmed)) {
+		return { id: Number(trimmed) };
+	}
+	if (WIKI_URL_RE.test(trimmed)) {
+		try {
+			const url = new URL(trimmed);
+			const path = url.pathname
+				.replace(WIKI_PATH_LEADING_SLASH_RE, "")
+				.replace(WIKI_PATH_TRAILING_SLASH_RE, "");
+			if (path && WIKI_NUMERIC_ID_RE.test(path)) {
+				return { id: Number(path) };
+			}
+			return path ? { slug: path } : {};
+		} catch {
+			return {};
+		}
+	}
+	return { slug: trimmed };
 }
 
 function buildMemoryTools(config: {
@@ -224,6 +308,9 @@ export function createAgentToolsFactory(
 			if (!res.ok) return;
 			toolMap[meta.name] = toolDef;
 		};
+		const gemini = deps.geminiApiKey
+			? createGoogleGenerativeAI({ apiKey: deps.geminiApiKey })
+			: null;
 
 		const memoryTools = buildMemoryTools({
 			apiKey: deps.supermemoryApiKey,
@@ -265,9 +352,244 @@ export function createAgentToolsFactory(
 			);
 		}
 
+		if (gemini) {
+			registerTool(
+				{
+					name: "gemini_image_generate",
+					description:
+						"Generate an image with Gemini 3 Pro Image Preview (Google).",
+					source: "core",
+					origin: "gemini",
+				},
+				tool({
+					description:
+						"Generate an image with Gemini 3 Pro Image Preview (Google).",
+					inputSchema: z.object({
+						prompt: z.string().describe("Image description prompt"),
+						aspectRatio: z
+							.enum(GEMINI_IMAGE_ASPECT_RATIOS)
+							.optional()
+							.describe("Optional aspect ratio (e.g. 1:1, 16:9)"),
+					}),
+					execute: async ({ prompt, aspectRatio }) => {
+						const startedAt = Date.now();
+						try {
+							const result = await generateText({
+								model: gemini(
+									GEMINI_IMAGE_MODEL_ID,
+								) as unknown as LanguageModel,
+								prompt,
+									providerOptions: {
+										google: {
+											responseModalities: ["TEXT", "IMAGE"],
+											imageConfig: {
+												aspectRatio,
+												imageSize: "1K",
+											},
+										},
+									},
+							});
+							const images: FilePart[] = [];
+							const imageFiles = (result.files ?? []).filter((file) =>
+								file.mediaType?.startsWith("image/"),
+							);
+							for (const [index, file] of imageFiles.entries()) {
+								if (images.length >= 1) break;
+								const mediaType = file.mediaType ?? "image/png";
+								const filename = `gemini-image-${index + 1}.${resolveImageExtension(mediaType)}`;
+								const buffer =
+									file.uint8Array ??
+									(file.base64 ? decodeBase64Payload(file.base64) : null);
+								if (deps.imageStore && buffer) {
+									const stored = await deps.imageStore.putImage({
+										buffer,
+										mediaType,
+										filename,
+										chatId: options?.chatId,
+										userId: options?.ctx?.from?.id?.toString(),
+									});
+									images.push({
+										mediaType: stored.mediaType,
+										url: stored.url,
+										filename: stored.filename ?? filename,
+									});
+									const ctxAny = options?.ctx as
+										| (BotContext & {
+												replyWithPhoto?: (
+													photo: string,
+													options?: Record<string, unknown>,
+												) => Promise<unknown>;
+										  })
+										| undefined;
+									if (ctxAny?.replyWithPhoto) {
+										try {
+											await ctxAny.replyWithPhoto(stored.url);
+										} catch (error) {
+											deps.logDebug(
+												"gemini_image_generate telegram send error",
+												{
+													error: String(error),
+												},
+											);
+										}
+									}
+									continue;
+								}
+								if (buffer) {
+									images.push(
+										toFilePart({
+											buffer,
+											mediaType,
+											filename,
+										}),
+									);
+									continue;
+								}
+								if (file.base64) {
+									const url = file.base64.startsWith("data:")
+										? file.base64
+										: `data:${mediaType};base64,${file.base64}`;
+									images.push({ mediaType, url, filename });
+								}
+							}
+
+							deps.logDebug("gemini_image_generate result", {
+								durationMs: Date.now() - startedAt,
+								imageCount: images.length,
+								hasText: Boolean(result.text?.trim()),
+							});
+							return {
+								ok: images.length > 0,
+								text: result.text ?? "",
+								images,
+							};
+						} catch (error) {
+							deps.logDebug("gemini_image_generate error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+		}
+
+		const runTrackerSearch = async (
+			question: string,
+			queue?: string,
+		): Promise<TrackerSearchPayload | { error: string }> => {
+			const startedAt = Date.now();
+			const commentStats = { fetched: 0, cacheHits: 0 };
+			const queueKey = queue ?? deps.defaultTrackerQueue;
+			const query = buildIssuesQuery(question, queueKey);
+			const payload = {
+				query,
+				fields: [
+					"key",
+					"summary",
+					"description",
+					"created_at",
+					"updated_at",
+					"status",
+					"tags",
+					"priority",
+					"estimation",
+					"spent",
+				],
+				per_page: 100,
+				include_description: true,
+			};
+			deps.logDebug("yandex_tracker_search", payload);
+			try {
+				const result = await deps.trackerClient.trackerCallTool(
+					"issues_find",
+					payload,
+					8_000,
+					options?.ctx,
+				);
+				const normalized = normalizeIssuesResult(result);
+				const keywords = extractKeywords(question, 12).map((item) =>
+					item.toLowerCase(),
+				);
+				const haveKeywords = keywords.length > 0;
+
+				const issues = normalized.issues;
+				const ranked = rankIssues(issues, question);
+				const top = ranked.slice(0, 20);
+				const commentsByIssue: Record<
+					string,
+					{ text: string; truncated: boolean }
+				> = {};
+				const commentDeadline = startedAt + deps.commentsFetchBudgetMs;
+				await deps.trackerClient.fetchCommentsWithBudget(
+					top.map((entry) => entry.key ?? ""),
+					commentsByIssue,
+					commentDeadline,
+					commentStats,
+					options?.ctx,
+				);
+
+				let selected = top;
+				if (haveKeywords) {
+					const matches = top.filter((entry) => {
+						const summary = getIssueField(entry.issue, ["summary", "title"]);
+						const description = getIssueField(entry.issue, ["description"]);
+						const comments = entry.key
+							? (commentsByIssue[entry.key]?.text ?? "")
+							: "";
+						const haystack = `${summary} ${description} ${comments}`;
+						return matchesKeywords(haystack, keywords);
+					});
+					if (matches.length) {
+						selected = matches;
+						deps.logDebug("yandex_tracker_search filtered", {
+							total: top.length,
+							matches: matches.length,
+						});
+					}
+				}
+
+				const topCandidates = selected.slice(0, 5).map((entry) => ({
+					key: entry.key,
+					summary: getIssueField(entry.issue, ["summary", "title"]),
+					score: entry.score,
+				}));
+				const topScore = selected[0]?.score ?? 0;
+				const secondScore = selected[1]?.score ?? 0;
+				const ambiguous =
+					selected.length > 1 && (topScore <= 3 || topScore - secondScore < 3);
+
+				if (options?.onCandidates) {
+					options.onCandidates(topCandidates);
+				}
+
+				deps.logDebug("yandex_tracker_search result", {
+					count: issues.length,
+					top: selected.map((item) => item.key).filter((key) => key),
+					commentsFetched: commentStats.fetched,
+					commentsCacheHits: commentStats.cacheHits,
+					durationMs: Date.now() - startedAt,
+					ambiguous,
+				});
+				return {
+					issues: selected.map((item) => item.issue),
+					scores: selected.map((item) => ({
+						key: item.key,
+						score: item.score,
+					})),
+					comments: commentsByIssue,
+					ambiguous,
+					candidates: topCandidates,
+				};
+			} catch (error) {
+				deps.logDebug("yandex_tracker_search error", { error: String(error) });
+				return { error: String(error) };
+			}
+		};
+
 		registerTool(
 			{
-				name: "tracker_search",
+				name: "yandex_tracker_search",
 				description: `Search Yandex Tracker issues in queue ${deps.defaultTrackerQueue} using keywords from the question.`,
 				source: "tracker",
 				origin: "core",
@@ -281,116 +603,139 @@ export function createAgentToolsFactory(
 						.optional()
 						.describe(`Queue key, defaults to ${deps.defaultTrackerQueue}`),
 				}),
+				execute: async ({ question, queue }) =>
+					runTrackerSearch(question, queue),
+			}),
+		);
+
+		registerTool(
+			{
+				name: "yandex_tracker_find_issue",
+				description:
+					"Find the best matching Yandex Tracker issues for a question.",
+				source: "tracker",
+				origin: "core",
+			},
+			tool({
+				description:
+					"Find the best matching Yandex Tracker issues for a question.",
+				inputSchema: z.object({
+					question: z.string().describe("User question or keywords"),
+					queue: z
+						.string()
+						.optional()
+						.describe(`Queue key, defaults to ${deps.defaultTrackerQueue}`),
+				}),
 				execute: async ({ question, queue }) => {
-					const startedAt = Date.now();
-					const commentStats = { fetched: 0, cacheHits: 0 };
-					const queueKey = queue ?? deps.defaultTrackerQueue;
-					const query = buildIssuesQuery(question, queueKey);
-					const payload = {
-						query,
-						fields: [
-							"key",
-							"summary",
-							"description",
-							"created_at",
-							"updated_at",
-							"status",
-							"tags",
-							"priority",
-							"estimation",
-							"spent",
-						],
-						per_page: 100,
-						include_description: true,
+					const result = await runTrackerSearch(question, queue);
+					if ("error" in result) return result;
+					return {
+						candidates: result.candidates,
+						ambiguous: result.ambiguous,
 					};
-					deps.logDebug("tracker_search", payload);
+				},
+			}),
+		);
+
+		registerTool(
+			{
+				name: "yandex_tracker_issue_summary",
+				description:
+					"Summarize a Yandex Tracker issue with key fields and last comments.",
+				source: "tracker",
+				origin: "core",
+			},
+			tool({
+				description:
+					"Summarize a Yandex Tracker issue with key fields and last comments.",
+				inputSchema: z.object({
+					issueKey: z.string().describe("Issue key (e.g., PROJ-123)"),
+				}),
+				execute: async ({ issueKey }) => {
+					const startedAt = Date.now();
 					try {
-						const result = await deps.trackerClient.trackerCallTool(
-							"issues_find",
-							payload,
-							8_000,
-							options?.ctx,
-						);
-						const normalized = normalizeIssuesResult(result);
-						const keywords = extractKeywords(question, 12).map((item) =>
-							item.toLowerCase(),
-						);
-						const haveKeywords = keywords.length > 0;
-
-						const issues = normalized.issues;
-						const ranked = rankIssues(issues, question);
-						const top = ranked.slice(0, 20);
-						const commentsByIssue: Record<
-							string,
-							{ text: string; truncated: boolean }
-						> = {};
-						const commentDeadline = startedAt + deps.commentsFetchBudgetMs;
-						await deps.trackerClient.fetchCommentsWithBudget(
-							top.map((entry) => entry.key ?? ""),
-							commentsByIssue,
-							commentDeadline,
-							commentStats,
-							options?.ctx,
-						);
-
-						let selected = top;
-						if (haveKeywords) {
-							const matches = top.filter((entry) => {
-								const summary = getIssueField(entry.issue, [
-									"summary",
-									"title",
-								]);
-								const description = getIssueField(entry.issue, ["description"]);
-								const comments = entry.key
-									? (commentsByIssue[entry.key]?.text ?? "")
+						const [issueResult, commentResult, attachmentsResult] =
+							await Promise.all([
+								deps.trackerClient.trackerCallTool(
+									"issue_get",
+									{ issue_id: issueKey },
+									8_000,
+									options?.ctx,
+								),
+								deps.trackerClient.trackerCallTool(
+									"issue_get_comments",
+									{ issue_id: issueKey },
+									8_000,
+									options?.ctx,
+								),
+								deps.trackerClient
+									.trackerCallTool(
+										"issue_get_attachments",
+										{ issue_id: issueKey },
+										8_000,
+										options?.ctx,
+									)
+									.catch(() => []),
+							]);
+						const issue = issueResult as Record<string, unknown>;
+						const summary = getIssueField(issue, ["summary", "title"]);
+						const status =
+							(issue.status as { display?: string; name?: string })?.display ??
+							(issue.status as { name?: string })?.name ??
+							"";
+						const updatedAt =
+							typeof issue.updated_at === "string"
+								? issue.updated_at
+								: typeof issue.updatedAt === "string"
+									? issue.updatedAt
 									: "";
-								const haystack = `${summary} ${description} ${comments}`;
-								return matchesKeywords(haystack, keywords);
-							});
-							if (matches.length) {
-								selected = matches;
-								deps.logDebug("tracker_search filtered", {
-									total: top.length,
-									matches: matches.length,
-								});
-							}
-						}
-
-						const topCandidates = selected.slice(0, 5).map((entry) => ({
-							key: entry.key,
-							summary: getIssueField(entry.issue, ["summary", "title"]),
-							score: entry.score,
-						}));
-						const topScore = selected[0]?.score ?? 0;
-						const secondScore = selected[1]?.score ?? 0;
-						const ambiguous =
-							selected.length > 1 &&
-							(topScore <= 3 || topScore - secondScore < 3);
-
-						if (options?.onCandidates) {
-							options.onCandidates(topCandidates);
-						}
-
-						deps.logDebug("tracker_search result", {
-							count: issues.length,
-							top: selected.map((item) => item.key).filter((key) => key),
-							commentsFetched: commentStats.fetched,
-							commentsCacheHits: commentStats.cacheHits,
-							durationMs: Date.now() - startedAt,
-							ambiguous,
-						});
+						const assignee =
+							(issue.assignee as { display?: string; name?: string })
+								?.display ??
+							(issue.assignee as { name?: string })?.name ??
+							"";
+						const priority =
+							(issue.priority as { display?: string; name?: string })
+								?.display ??
+							(issue.priority as { name?: string })?.name ??
+							"";
+						const commentsText = Array.isArray(commentResult)
+							? commentResult
+									.map((item) => (item as { text?: string }).text ?? "")
+									.filter(Boolean)
+									.join("\n")
+							: "";
+						const lastComment = commentsText
+							? (commentsText.split("\n").pop() ?? "")
+							: "";
+						const hasAttachments = Array.isArray(attachmentsResult)
+							? attachmentsResult.length > 0
+							: false;
+						const summaryLine = [
+							issueKey,
+							summary,
+							status ? `— ${status}` : "",
+							assignee ? `@${assignee}` : "",
+							priority ? `(${priority})` : "",
+						]
+							.filter(Boolean)
+							.join(" ");
 						return {
-							issues: selected.map((item) => item.issue),
-							scores: selected.map((item) => ({
-								key: item.key,
-								score: item.score,
-							})),
-							comments: commentsByIssue,
-							ambiguous,
-							candidates: topCandidates,
+							ok: true,
+							key: issueKey,
+							summary: summaryLine,
+							status,
+							updatedAt,
+							assignee,
+							priority,
+							lastComment: lastComment ? lastComment.slice(0, 400) : "",
+							hasAttachments,
+							elapsedMs: Date.now() - startedAt,
 						};
 					} catch (error) {
-						deps.logDebug("tracker_search error", { error: String(error) });
+						deps.logDebug("yandex_tracker_issue_summary error", {
+							error: String(error),
+						});
 						return { error: String(error) };
 					}
 				},
@@ -728,6 +1073,197 @@ export function createAgentToolsFactory(
 		}
 
 		if (deps.wikiEnabled) {
+			registerTool(
+				{
+					name: "yandex_wiki_find_page",
+					description: "Resolve a Yandex Wiki page by URL, slug, or id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Resolve a Yandex Wiki page by URL, slug, or id.",
+					inputSchema: z.object({
+						query: z.string().describe("Wiki page URL, slug, or numeric id"),
+						fields: z
+							.string()
+							.optional()
+							.describe("Comma-separated fields for the wiki API"),
+						raiseOnRedirect: z
+							.boolean()
+							.optional()
+							.describe("Throw if the page is a redirect"),
+						followRedirects: z
+							.boolean()
+							.optional()
+							.describe("Follow redirects automatically"),
+					}),
+					execute: async ({
+						query,
+						fields,
+						raiseOnRedirect,
+						followRedirects,
+					}) => {
+						const ref = parseWikiReference(query);
+						if (ref.id) {
+							try {
+								const page = await deps.wikiClient.wikiPageGetById({
+									id: ref.id,
+									fields,
+									raiseOnRedirect,
+									followRedirects,
+								});
+								return { ok: true, page };
+							} catch (error) {
+								deps.logDebug("yandex_wiki_find_page error", {
+									error: String(error),
+								});
+								return { error: String(error) };
+							}
+						}
+						if (ref.slug) {
+							try {
+								const page = await deps.wikiClient.wikiPageGet({
+									slug: ref.slug,
+									fields,
+									raiseOnRedirect,
+								});
+								return { ok: true, page };
+							} catch (error) {
+								deps.logDebug("yandex_wiki_find_page error", {
+									error: String(error),
+								});
+								return { error: String(error) };
+							}
+						}
+						return { error: "wiki_reference_not_found" };
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "yandex_wiki_read_page",
+					description: "Read a Yandex Wiki page by URL, slug, or id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Read a Yandex Wiki page by URL, slug, or id.",
+					inputSchema: z.object({
+						ref: z.string().describe("Wiki page URL, slug, or numeric id"),
+						fields: z
+							.string()
+							.optional()
+							.describe("Comma-separated fields for the wiki API"),
+						raiseOnRedirect: z
+							.boolean()
+							.optional()
+							.describe("Throw if the page is a redirect"),
+						followRedirects: z
+							.boolean()
+							.optional()
+							.describe("Follow redirects automatically"),
+					}),
+					execute: async ({
+						ref,
+						fields,
+						raiseOnRedirect,
+						followRedirects,
+					}) => {
+						const resolved = parseWikiReference(ref);
+						try {
+							if (resolved.id) {
+								return await deps.wikiClient.wikiPageGetById({
+									id: resolved.id,
+									fields,
+									raiseOnRedirect,
+									followRedirects,
+								});
+							}
+							if (resolved.slug) {
+								return await deps.wikiClient.wikiPageGet({
+									slug: resolved.slug,
+									fields,
+									raiseOnRedirect,
+								});
+							}
+							return { error: "wiki_reference_not_found" };
+						} catch (error) {
+							deps.logDebug("yandex_wiki_read_page error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "yandex_wiki_update_page",
+					description: "Update a Yandex Wiki page by id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Update a Yandex Wiki page by id.",
+					inputSchema: z.object({
+						id: z.number().describe("Page id"),
+						title: z.string().optional().describe("New title"),
+						content: z.string().optional().describe("New content"),
+						allowMerge: z.boolean().optional().describe("Allow merging edits"),
+						isSilent: z.boolean().optional().describe("Suppress notifications"),
+					}),
+					execute: async ({ id, title, content, allowMerge, isSilent }) => {
+						try {
+							return await deps.wikiClient.wikiPageUpdate({
+								id,
+								title,
+								content,
+								allowMerge,
+								isSilent,
+							});
+						} catch (error) {
+							deps.logDebug("yandex_wiki_update_page error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "yandex_wiki_append_page",
+					description: "Append content to a Yandex Wiki page by id.",
+					source: "wiki",
+					origin: "yandex-wiki",
+				},
+				tool({
+					description: "Append content to a Yandex Wiki page by id.",
+					inputSchema: z.object({
+						id: z.number().describe("Page id"),
+						content: z.string().describe("Content to append"),
+						isSilent: z.boolean().optional().describe("Suppress notifications"),
+					}),
+					execute: async ({ id, content, isSilent }) => {
+						try {
+							return await deps.wikiClient.wikiPageAppendContent({
+								id,
+								content,
+								isSilent,
+							});
+						} catch (error) {
+							deps.logDebug("yandex_wiki_append_page error", {
+								error: String(error),
+							});
+							return { error: String(error) };
+						}
+					},
+				}),
+			);
+
 			registerTool(
 				{
 					name: "wiki_page_get",
@@ -1724,7 +2260,32 @@ export function createAgentStreamWithTools(
 					}
 				},
 			});
-			writer.merge(stream);
+			const reader = stream.getReader();
+			while (true) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				if (!value) continue;
+				writer.write(value);
+				if (value.type === "tool-output-available") {
+					const output = value.output as {
+						images?: Array<{ mediaType?: unknown; url?: unknown }>;
+					};
+					const images = Array.isArray(output?.images) ? output.images : [];
+					for (const image of images.slice(0, 1)) {
+						if (
+							image &&
+							typeof image.mediaType === "string" &&
+							typeof image.url === "string"
+						) {
+							writer.write({
+								type: "file",
+								mediaType: image.mediaType,
+								url: image.url,
+							});
+						}
+					}
+				}
+			}
 		},
 	});
 }
