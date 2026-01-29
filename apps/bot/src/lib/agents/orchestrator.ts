@@ -1,5 +1,11 @@
 import { openai } from "@ai-sdk/openai";
-import { stepCountIs, ToolLoopAgent, type ToolSet, tool } from "ai";
+import {
+	type LanguageModel,
+	stepCountIs,
+	ToolLoopAgent,
+	type ToolSet,
+	tool,
+} from "ai";
 import { regex } from "arkregex";
 import { z } from "zod";
 import { buildSystemPrompt } from "../prompts/system-prompt.js";
@@ -39,6 +45,9 @@ export type OrchestrationContext = {
 		reasoning: string;
 		globalSoul?: string;
 	};
+	getModel?: (provider: "openai" | "google", modelId: string) => LanguageModel;
+	defaultSubagentModelProvider?: "openai" | "google";
+	defaultSubagentModelId?: string;
 	allowAgents?: OrchestrationAgentId[];
 	denyAgents?: OrchestrationAgentId[];
 	parallelism?: number;
@@ -46,6 +55,7 @@ export type OrchestrationContext = {
 		string,
 		{
 			modelId?: string;
+			provider?: "openai" | "google";
 			maxSteps?: number;
 			timeoutMs?: number;
 			instructions?: string;
@@ -104,11 +114,14 @@ function buildSubagentSystemPrompt(params: {
 		reasoning: promptContext.reasoning,
 	});
 	const globalSoul = promptContext.globalSoul?.trim();
-	const soulBlock = globalSoul ? ["SOUL (global):", globalSoul, ""].join("\n") : "";
-	const toolLines = params.toolNames.length > 0 ? params.toolNames.join("\n") : "(none)";
+	const soulBlock = globalSoul
+		? ["SOUL (global):", globalSoul, ""].join("\n")
+		: "";
+	const toolLines =
+		params.toolNames.length > 0 ? params.toolNames.join("\n") : "(none)";
 	const toolsBlock = ["Available tools:", toolLines, ""].join("\n");
 	return [base, soulBlock, toolsBlock, params.baseInstruction]
-		.filter((line) => line && line.trim())
+		.filter((line) => line?.trim())
 		.join("\n\n");
 }
 
@@ -357,7 +370,8 @@ export async function runOrchestration(
 						baseInstruction: instructions,
 					})
 				: instructions;
-		const modelId = override.modelId ?? context.modelId;
+		const modelId =
+			override.modelId ?? context.defaultSubagentModelId ?? context.modelId;
 		const maxSteps =
 			override.maxSteps ?? budget?.maxSteps ?? context.defaultMaxSteps ?? 3;
 		const timeoutMs =
@@ -365,8 +379,13 @@ export async function runOrchestration(
 			budget?.timeoutMs ??
 			context.defaultTimeoutMs ??
 			20_000;
+		const provider =
+			override.provider ?? context.defaultSubagentModelProvider ?? "openai";
+		const modelFactory =
+			context.getModel ??
+			((prov, id) => (prov === "google" ? openai(id) : openai(id)));
 		const agent = new ToolLoopAgent({
-			model: openai(modelId),
+			model: modelFactory(provider, modelId),
 			instructions: resolvedInstructions,
 			tools: wrappedTools,
 			stopWhen: stepCountIs(maxSteps),

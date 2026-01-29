@@ -49,6 +49,7 @@ export type OrchestrationHelpers = {
 			string,
 			{
 				modelId?: string;
+				provider?: "openai" | "google";
 				maxSteps?: number;
 				timeoutMs?: number;
 				instructions?: string;
@@ -121,6 +122,7 @@ export function createOrchestrationHelpers(
 				string,
 				{
 					modelId?: string;
+					provider?: "openai" | "google";
 					maxSteps?: number;
 					timeoutMs?: number;
 					instructions?: string;
