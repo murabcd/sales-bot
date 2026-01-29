@@ -2,6 +2,7 @@ import type {
 	DurableObject,
 	DurableObjectState,
 	DurableObjectNamespace,
+	R2Bucket,
 	Request as WorkerRequest,
 	Response as WorkerResponse,
 } from "@cloudflare/workers-types";
@@ -15,6 +16,7 @@ import {
 } from "../apps/bot/src/lib/gateway/config.js";
 import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
 import { markdownToTelegramHtmlChunks } from "../apps/bot/src/lib/telegram/format.js";
+import { cleanupExpiredImagePrefixes, createR2ImageStore } from "./lib/image-store.js";
 
 export type CronSchedule =
 	| { kind: "at"; atMs: number }
@@ -27,6 +29,7 @@ export type CronWakeMode = "next-heartbeat" | "now";
 export type CronPayload =
 	| { kind: "systemEvent"; text: string }
 	| { kind: "dailyStatus"; to?: string }
+	| { kind: "imageCleanup" }
 	| {
 			kind: "agentTurn";
 			message: string;
@@ -105,13 +108,22 @@ export type CronRunLogEntry = {
 
 const STORE_KEY = "cron";
 const MAX_RUN_LOGS = 200;
+const DEFAULT_MAX_RUNTIME_MS = 15 * 60 * 1000;
 let botPromise: Promise<Awaited<ReturnType<typeof createBot>>> | null = null;
 type CronEnv = Record<string, string | undefined> & {
 	GATEWAY_CONFIG_DO: DurableObjectNamespace;
+	omni: R2Bucket;
 };
 
 function now() {
 	return Date.now();
+}
+
+function resolveMaxRuntimeMs(env: Record<string, string | undefined>) {
+	const raw = env.CRON_JOB_MAX_RUNTIME_MS ?? "";
+	const parsed = Number.parseInt(raw, 10);
+	if (Number.isFinite(parsed) && parsed > 0) return parsed;
+	return DEFAULT_MAX_RUNTIME_MS;
 }
 
 function toWorkerResponse(response: Response): WorkerResponse {
@@ -121,10 +133,30 @@ function toWorkerResponse(response: Response): WorkerResponse {
 async function getBot(env: Record<string, string | undefined>) {
 	if (botPromise === null) {
 		botPromise = (async () => {
+			const typedEnv = env as CronEnv;
+			const signingSecret = typedEnv.IMAGE_SIGNING_SECRET?.trim() ?? "";
+			const baseUrl = typedEnv.PUBLIC_BASE_URL?.trim() ?? "";
+			const retentionDays = Number.parseInt(
+				typedEnv.IMAGE_RETENTION_DAYS ?? "7",
+				10,
+			);
+			const imageStore =
+				signingSecret && typedEnv.omni
+					? createR2ImageStore({
+							bucket: typedEnv.omni,
+							baseUrl,
+							signingSecret,
+							retentionDays:
+								Number.isFinite(retentionDays) && retentionDays > 0
+									? retentionDays
+									: 7,
+						})
+					: undefined;
 			const runtime = await createBot({
 				env,
 				modelsConfig,
 				runtimeSkills,
+				imageStore,
 			});
 			await runtime.bot.init();
 			return runtime;
@@ -578,6 +610,33 @@ export class CronDO implements DurableObject {
 	}) {
 		const state = await this.load();
 		const timestamp = now();
+		const maxRuntimeMs = resolveMaxRuntimeMs(this.env);
+		for (const job of Object.values(state.jobs)) {
+			if (!job.state?.runningAtMs) continue;
+			const runningForMs = timestamp - job.state.runningAtMs;
+			if (runningForMs <= maxRuntimeMs) continue;
+			job.state = {
+				...(job.state ?? {}),
+				runningAtMs: undefined,
+				lastRunAtMs: timestamp,
+				lastStatus: "error",
+				lastError: "stale_run_timeout",
+				lastDurationMs: runningForMs,
+			};
+			job.updatedAtMs = timestamp;
+			job.state.nextRunAtMs = computeNextRun(job, timestamp) ?? undefined;
+			await this.appendRun(state, {
+				ts: timestamp,
+				jobId: job.id,
+				status: "error",
+				error: "stale_run_timeout",
+				summary: "stale run cleared",
+				durationMs: runningForMs,
+			});
+			state.jobs[job.id] = job;
+		}
+		await this.scheduleNextWake(state.jobs);
+		await this.save(state);
 		const runJobs = Object.values(state.jobs).filter((job) => {
 			if (options?.onlyJobId && job.id !== options.onlyJobId) return false;
 			if (!job.enabled && options?.mode !== "force") return false;
@@ -633,6 +692,19 @@ export class CronDO implements DurableObject {
 						);
 					}
 					summary = reportParts.header;
+				} else if (job.payload.kind === "imageCleanup") {
+					const retentionDays = Number.parseInt(
+						this.env.IMAGE_RETENTION_DAYS ?? "7",
+						10,
+					);
+					await cleanupExpiredImagePrefixes({
+						bucket: this.env.omni,
+						retentionDays:
+							Number.isFinite(retentionDays) && retentionDays > 0
+								? retentionDays
+								: 7,
+					});
+					summary = "image cleanup completed";
 				} else {
 					const runtime = await getBot(this.env);
 					const result = await runtime.runLocalChat({

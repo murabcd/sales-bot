@@ -3,6 +3,7 @@ import type {
 	DurableObjectNamespace,
 	DurableObjectState,
 	ExecutionContext,
+	R2Bucket,
 	Request as WorkerRequest,
 	Response as WorkerResponse,
 } from "@cloudflare/workers-types";
@@ -28,6 +29,11 @@ import {
 	buildAdminStatusPayload,
 } from "./lib/gateway.js";
 import {
+	cleanupExpiredImagePrefixes,
+	createR2ImageStore,
+	verifyImageSignature,
+} from "./lib/image-store.js";
+import {
 	buildSkillsStatusReport,
 	parseSkillsConfig,
 	SKILLS_CONFIG_KEY,
@@ -37,6 +43,7 @@ import { SessionsDO } from "./sessions-do.js";
 
 const startTime = Date.now();
 const SOUL_PROMPT = typeof soulConfig?.text === "string" ? soulConfig.text : "";
+let imageCleanupEnsured: Promise<void> | null = null;
 
 type Env = Record<string, string | undefined> & {
 	UPDATES_DO: DurableObjectNamespace;
@@ -44,6 +51,7 @@ type Env = Record<string, string | undefined> & {
 	SESSIONS_DO: DurableObjectNamespace;
 	CRON_DO: DurableObjectNamespace;
 	CHANNELS_DO: DurableObjectNamespace;
+	omni: R2Bucket;
 };
 
 type BotRuntime = Awaited<ReturnType<typeof createBot>>;
@@ -76,11 +84,65 @@ function getUptimeSeconds() {
 	return (Date.now() - startTime) / 1000;
 }
 
+function resolveImageRetentionDays(env: Env) {
+	const value = Number.parseInt(env.IMAGE_RETENTION_DAYS ?? "7", 10);
+	return Number.isFinite(value) && value > 0 ? value : 7;
+}
+
+function resolveImageSigningSecret(env: Env) {
+	return env.IMAGE_SIGNING_SECRET?.trim() ?? "";
+}
+
+function resolvePublicBaseUrl(env: Env) {
+	return env.PUBLIC_BASE_URL?.trim() ?? "";
+}
+
+function getImageStore(env: Env) {
+	const signingSecret = resolveImageSigningSecret(env);
+	if (!signingSecret) return null;
+	return createR2ImageStore({
+		bucket: env.omni,
+		baseUrl: resolvePublicBaseUrl(env),
+		signingSecret,
+		retentionDays: resolveImageRetentionDays(env),
+	});
+}
+
+async function ensureImageCleanupJob(env: Env) {
+	if (imageCleanupEnsured) return imageCleanupEnsured;
+	imageCleanupEnsured = (async () => {
+		const response = await callCron(env, "/list", {});
+		if (!response.ok) return;
+		const payload = (await response.json()) as { jobs?: Array<{ id?: string }> };
+		const exists = (payload.jobs ?? []).some((job) => job.id === "image-cleanup");
+		if (exists) return;
+		const now = Date.now();
+		await callCron(env, "/add", {
+			id: "image-cleanup",
+			name: "Image cleanup",
+			description: "Delete expired images from R2.",
+			enabled: true,
+			createdAtMs: now,
+			updatedAtMs: now,
+			schedule: { kind: "cron", expr: "30 3 * * *", tz: "UTC" },
+			sessionTarget: "main",
+			wakeMode: "now",
+			payload: { kind: "imageCleanup" },
+		});
+	})();
+	return imageCleanupEnsured;
+}
+
 async function getBot(env: Record<string, string | undefined>) {
 	if (!botPromise) {
 		botPromise = (async () => {
 			const effectiveEnv =
 				SOUL_PROMPT.trim().length > 0 ? { ...env, SOUL_PROMPT } : env;
+			const typedEnv = env as Env;
+			const imageStore = getImageStore(typedEnv);
+			if (imageStore) {
+				await ensureImageCleanupJob(typedEnv);
+			}
 			const cronClient = {
 				list: async (params?: { includeDisabled?: boolean }) => {
 					const response = await callCron(env as Env, "/list", params ?? {});
@@ -117,6 +179,7 @@ async function getBot(env: Record<string, string | undefined>) {
 				runtimeSkills,
 				getUptimeSeconds,
 				cronClient,
+				imageStore: imageStore ?? undefined,
 			});
 			await runtime.bot.init();
 			return runtime;
@@ -506,6 +569,39 @@ export default {
 
 		if (url.pathname === "/health") {
 			return toWorkerResponse(await handleHealthCheck(env));
+		}
+
+		if (url.pathname.startsWith("/media/") && request.method === "GET") {
+			const signingSecret = resolveImageSigningSecret(env);
+			if (!signingSecret) {
+				return toWorkerResponse(new Response("image_signing_secret_missing", { status: 500 }));
+			}
+			const keyEncoded = url.pathname.slice("/media/".length);
+			if (!keyEncoded) {
+				return toWorkerResponse(new Response("missing_key", { status: 400 }));
+			}
+			const key = decodeURIComponent(keyEncoded);
+			const expRaw = url.searchParams.get("exp") ?? "";
+			const sig = url.searchParams.get("sig") ?? "";
+			const exp = Number.parseInt(expRaw, 10);
+			if (!exp || !sig) {
+				return toWorkerResponse(new Response("invalid_signature", { status: 400 }));
+			}
+			if (!verifyImageSignature({ signingSecret, key, exp, sig })) {
+				return toWorkerResponse(new Response("signature_mismatch", { status: 403 }));
+			}
+			if (Date.now() > exp) {
+				await env.omni.delete(key);
+				return toWorkerResponse(new Response("expired", { status: 410 }));
+			}
+			const object = await env.omni.get(key);
+			if (!object) {
+				return toWorkerResponse(new Response("not_found", { status: 404 }));
+			}
+			const headers = new Headers();
+			object.writeHttpMetadata(headers);
+			headers.set("Cache-Control", "private, max-age=3600");
+			return toWorkerResponse(new Response(object.body, { status: 200, headers }));
 		}
 
 		if (url.pathname === "/gateway" && isWebSocketUpgrade(request)) {
