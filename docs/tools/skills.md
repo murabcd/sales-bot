@@ -6,7 +6,7 @@ read_when:
 # Skills
 
 Omni loads runtime skills from `apps/bot/skills/**/skill.json` at startup. These are
-shortcuts for calling Tracker tools with predefined arguments.
+shortcuts for calling Yandex Tracker tools with predefined arguments.
 
 Notes:
 
@@ -25,7 +25,7 @@ Example `skill.json`:
 ```json
 {
   "name": "issues_find",
-  "description": "Search Tracker issues",
+  "description": "Search Yandex Tracker issues",
   "tool": "yandex-tracker.issues_find",
   "args": { "query": "Assignee: me" }
 }

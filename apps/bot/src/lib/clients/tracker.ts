@@ -42,6 +42,15 @@ export type TrackerClient = {
 	) => Promise<T>;
 	trackerHealthCheck: () => Promise<Record<string, unknown>>;
 	getLastTrackerCallAt: () => number | null;
+	downloadAttachment: (
+		attachmentId: string,
+		timeoutMs: number,
+	) => Promise<{
+		buffer: Uint8Array;
+		contentType?: string;
+		filename?: string;
+		size?: number;
+	}>;
 	fetchCommentsWithBudget: (
 		keys: string[],
 		commentsByIssue: Record<string, { text: string; truncated: boolean }>,
@@ -90,6 +99,22 @@ export function createTrackerClient(
 		return url.toString();
 	}
 
+	function parseContentDispositionFilename(
+		value?: string | null,
+	): string | null {
+		if (!value) return null;
+		const utfMatch = value.match(/filename\\*=UTF-8''([^;]+)/i);
+		if (utfMatch?.[1]) {
+			try {
+				return decodeURIComponent(utfMatch[1]);
+			} catch {
+				return utfMatch[1];
+			}
+		}
+		const match = value.match(/filename="?([^";]+)"?/i);
+		return match?.[1] ?? null;
+	}
+
 	async function trackerRequest<T>(
 		method: string,
 		pathname: string,
@@ -133,46 +158,437 @@ export function createTrackerClient(
 	}
 
 	async function trackerIssuesFind(options: {
-		query: string;
+		query?: string;
+		filter?: Record<string, unknown>;
+		queue?: string;
+		keys?: string[] | string;
+		order?: string;
+		expand?: string | string[];
+		fields?: string | string[];
 		perPage?: number;
 		page?: number;
+		scrollId?: string;
+		scrollTTLMillis?: number;
 		timeoutMs?: number;
 	}) {
-		if (!options.query) return [];
+		if (!options.query && !options.filter && !options.queue && !options.keys)
+			return [];
+		const query: Record<string, string> = {};
+		if (options.perPage) query.perPage = String(options.perPage);
+		if (options.page) query.page = String(options.page);
+		if (options.scrollId) query.scrollId = options.scrollId;
+		if (options.scrollTTLMillis)
+			query.scrollTTLMillis = String(options.scrollTTLMillis);
+		if (options.expand) {
+			query.expand = Array.isArray(options.expand)
+				? options.expand.join(",")
+				: options.expand;
+		}
+		if (options.fields) {
+			query.fields = Array.isArray(options.fields)
+				? options.fields.join(",")
+				: options.fields;
+		}
+		const body: Record<string, unknown> = {};
+		if (options.query) body.query = options.query;
+		if (options.filter) body.filter = options.filter;
+		if (options.queue) body.queue = options.queue;
+		if (options.keys) body.keys = options.keys;
+		if (options.order) body.order = options.order;
 		return trackerRequest<Array<Record<string, unknown>>>(
 			"POST",
 			"/v3/issues/_search",
 			{
-				query: {
-					perPage: String(options.perPage ?? 100),
-					page: String(options.page ?? 1),
-				},
-				body: { query: options.query },
+				query,
+				body,
 				timeoutMs: options.timeoutMs,
 			},
 		);
 	}
 
-	async function trackerIssueGet(issueId: string, timeoutMs?: number) {
+	async function trackerIssueGet(
+		issueId: string,
+		timeoutMs?: number,
+		options?: { expand?: string | string[]; fields?: string | string[] },
+	) {
 		if (!issueId) throw new Error("missing_issue_id");
+		const query: Record<string, string> = {};
+		if (options?.expand) {
+			query.expand = Array.isArray(options.expand)
+				? options.expand.join(",")
+				: options.expand;
+		}
+		if (options?.fields) {
+			query.fields = Array.isArray(options.fields)
+				? options.fields.join(",")
+				: options.fields;
+		}
 		return trackerRequest<Record<string, unknown>>(
 			"GET",
 			`/v3/issues/${encodeURIComponent(issueId)}`,
+			{ query, timeoutMs },
+		);
+	}
+
+	async function trackerIssueGetComments(
+		issueId: string,
+		timeoutMs?: number,
+		options?: { perPage?: number; page?: number },
+	) {
+		if (!issueId) throw new Error("missing_issue_id");
+		const query: Record<string, string> = {};
+		if (options?.perPage) query.perPage = String(options.perPage);
+		if (options?.page) query.page = String(options.page);
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			`/v3/issues/${encodeURIComponent(issueId)}/comments`,
+			{ query, timeoutMs },
+		);
+	}
+
+	async function trackerIssueGetLinks(issueId: string, timeoutMs?: number) {
+		if (!issueId) throw new Error("missing_issue_id");
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			`/v3/issues/${encodeURIComponent(issueId)}/links`,
 			{ timeoutMs },
 		);
 	}
 
-	async function trackerIssueGetComments(issueId: string, timeoutMs?: number) {
+	async function trackerIssueGetWorklogs(issueId: string, timeoutMs?: number) {
 		if (!issueId) throw new Error("missing_issue_id");
 		return trackerRequest<Array<Record<string, unknown>>>(
 			"GET",
-			`/v3/issues/${encodeURIComponent(issueId)}/comments`,
+			`/v3/issues/${encodeURIComponent(issueId)}/worklog`,
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerIssueGetChecklist(issueId: string, timeoutMs?: number) {
+		if (!issueId) throw new Error("missing_issue_id");
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			`/v3/issues/${encodeURIComponent(issueId)}/checklistItems`,
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerIssueGetTransitions(
+		issueId: string,
+		timeoutMs?: number,
+	) {
+		if (!issueId) throw new Error("missing_issue_id");
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			`/v3/issues/${encodeURIComponent(issueId)}/transitions`,
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerIssueExecuteTransition(
+		issueId: string,
+		transitionId: string,
+		body: Record<string, unknown>,
+		timeoutMs?: number,
+	) {
+		if (!issueId) throw new Error("missing_issue_id");
+		if (!transitionId) throw new Error("missing_transition_id");
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"POST",
+			`/v3/issues/${encodeURIComponent(issueId)}/transitions/${encodeURIComponent(transitionId)}/_execute`,
+			{ body, timeoutMs },
+		);
+	}
+
+	async function trackerIssueGetAttachments(
+		issueId: string,
+		timeoutMs?: number,
+	) {
+		if (!issueId) throw new Error("missing_issue_id");
+		const issue = await trackerRequest<Record<string, unknown>>(
+			"GET",
+			`/v3/issues/${encodeURIComponent(issueId)}`,
+			{ query: { expand: "attachments" }, timeoutMs },
+		);
+		const attachments =
+			issue && typeof issue === "object" && "attachments" in issue
+				? (issue as { attachments?: unknown }).attachments
+				: undefined;
+		return Array.isArray(attachments) ? attachments : [];
+	}
+
+	async function trackerIssueCreate(
+		body: Record<string, unknown>,
+		timeoutMs?: number,
+	) {
+		return trackerRequest<Record<string, unknown>>("POST", "/v3/issues/", {
+			body,
+			timeoutMs,
+		});
+	}
+
+	async function trackerIssueUpdate(
+		issueId: string,
+		body: Record<string, unknown>,
+		timeoutMs?: number,
+	) {
+		if (!issueId) throw new Error("missing_issue_id");
+		return trackerRequest<Record<string, unknown>>(
+			"PATCH",
+			`/v3/issues/${encodeURIComponent(issueId)}`,
+			{ body, timeoutMs },
+		);
+	}
+
+	async function trackerIssuesCount(
+		body: Record<string, unknown>,
+		timeoutMs?: number,
+	) {
+		return trackerRequest<number>("POST", "/v3/issues/_count", {
+			body,
+			timeoutMs,
+		});
+	}
+
+	async function trackerQueuesGetAll(options: {
+		expand?: string | string[];
+		perPage?: number;
+		page?: number;
+		timeoutMs?: number;
+	}) {
+		const query: Record<string, string> = {};
+		if (options.perPage) query.perPage = String(options.perPage);
+		if (options.page) query.page = String(options.page);
+		if (options.expand) {
+			query.expand = Array.isArray(options.expand)
+				? options.expand.join(",")
+				: options.expand;
+		}
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			"/v3/queues/",
+			{
+				query,
+				timeoutMs: options.timeoutMs,
+			},
+		);
+	}
+
+	async function trackerQueueGetMetadata(options: {
+		queueId: string;
+		expand?: string | string[];
+		timeoutMs?: number;
+	}) {
+		if (!options.queueId) throw new Error("missing_queue_id");
+		const query: Record<string, string> = {};
+		if (options.expand) {
+			query.expand = Array.isArray(options.expand)
+				? options.expand.join(",")
+				: options.expand;
+		}
+		return trackerRequest<Record<string, unknown>>(
+			"GET",
+			`/v3/queues/${encodeURIComponent(options.queueId)}`,
+			{ query, timeoutMs: options.timeoutMs },
+		);
+	}
+
+	async function trackerQueueGetTags(queueId: string, timeoutMs?: number) {
+		if (!queueId) throw new Error("missing_queue_id");
+		return trackerRequest<Array<string>>(
+			"GET",
+			`/v3/queues/${encodeURIComponent(queueId)}/tags`,
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerQueueGetVersions(queueId: string, timeoutMs?: number) {
+		if (!queueId) throw new Error("missing_queue_id");
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			`/v3/queues/${encodeURIComponent(queueId)}/versions`,
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerQueueGetFields(queueId: string, timeoutMs?: number) {
+		if (!queueId) throw new Error("missing_queue_id");
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			`/v3/queues/${encodeURIComponent(queueId)}/fields`,
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerUsersGetAll(options: {
+		perPage?: number;
+		page?: number;
+		timeoutMs?: number;
+	}) {
+		const query: Record<string, string> = {};
+		if (options.perPage) query.perPage = String(options.perPage);
+		if (options.page) query.page = String(options.page);
+		return trackerRequest<Array<Record<string, unknown>>>("GET", "/v3/users", {
+			query,
+			timeoutMs: options.timeoutMs,
+		});
+	}
+
+	async function trackerUserGet(
+		userId: string,
+		timeoutMs?: number,
+	): Promise<Record<string, unknown>> {
+		if (!userId) throw new Error("missing_user_id");
+		return trackerRequest<Record<string, unknown>>(
+			"GET",
+			`/v3/users/${encodeURIComponent(userId)}`,
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerUserGetCurrent(timeoutMs?: number) {
+		return trackerRequest<Record<string, unknown>>("GET", "/v3/myself", {
+			timeoutMs,
+		});
+	}
+
+	async function trackerUsersSearch(options: {
+		needle: string;
+		perPage?: number;
+		page?: number;
+		timeoutMs?: number;
+	}) {
+		const needle = options.needle.trim().toLowerCase();
+		if (!needle) return [];
+		const perPage = options.perPage ?? 50;
+		const startPage = options.page ?? 1;
+		const maxPages = options.page ? 1 : 5;
+		let page = startPage;
+		const matches: Array<Record<string, unknown>> = [];
+
+		for (let i = 0; i < maxPages; i += 1) {
+			const users = await trackerUsersGetAll({
+				perPage,
+				page,
+				timeoutMs: options.timeoutMs,
+			});
+			if (!Array.isArray(users) || users.length === 0) break;
+			for (const user of users) {
+				const login =
+					typeof user.login === "string" ? user.login.toLowerCase() : "";
+				const email =
+					typeof user.email === "string" ? user.email.toLowerCase() : "";
+				const display =
+					typeof user.display === "string" ? user.display.toLowerCase() : "";
+				const firstName =
+					typeof user.firstName === "string"
+						? user.firstName.toLowerCase()
+						: "";
+				const lastName =
+					typeof user.lastName === "string" ? user.lastName.toLowerCase() : "";
+				if (
+					login.includes(needle) ||
+					email.includes(needle) ||
+					display.includes(needle) ||
+					firstName.includes(needle) ||
+					lastName.includes(needle)
+				) {
+					matches.push(user);
+				}
+			}
+			if (users.length < perPage) break;
+			page += 1;
+		}
+
+		return matches;
+	}
+
+	async function trackerGetGlobalFields(timeoutMs?: number) {
+		return trackerRequest<Array<Record<string, unknown>>>("GET", "/v3/fields", {
+			timeoutMs,
+		});
+	}
+
+	async function trackerGetStatuses(timeoutMs?: number) {
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			"/v3/statuses",
+			{
+				timeoutMs,
+			},
+		);
+	}
+
+	async function trackerGetIssueTypes(timeoutMs?: number) {
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			"/v3/issuetypes",
+			{ timeoutMs },
+		);
+	}
+
+	async function trackerGetPriorities(
+		localized: boolean | undefined,
+		timeoutMs?: number,
+	) {
+		const query: Record<string, string> = {};
+		if (typeof localized === "boolean") {
+			query.localized = localized ? "true" : "false";
+		}
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			"/v3/priorities",
+			{ query, timeoutMs },
+		);
+	}
+
+	async function trackerGetResolutions(timeoutMs?: number) {
+		return trackerRequest<Array<Record<string, unknown>>>(
+			"GET",
+			"/v3/resolutions",
 			{ timeoutMs },
 		);
 	}
 
 	async function trackerHealthCheck() {
 		return trackerRequest<Record<string, unknown>>("GET", "/v3/myself");
+	}
+
+	async function trackerDownloadAttachment(
+		attachmentId: string,
+		timeoutMs: number,
+	) {
+		if (!attachmentId) throw new Error("missing_attachment_id");
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), timeoutMs);
+		try {
+			const headers = trackerHeaders();
+			const url = buildTrackerUrl(
+				`/v2/attachments/${encodeURIComponent(attachmentId)}`,
+			);
+			const response = await fetch(url, {
+				method: "GET",
+				headers,
+				signal: controller.signal,
+			});
+			if (!response.ok) {
+				const text = await response.text();
+				throw new Error(
+					`tracker_attachment_error:${response.status}:${response.statusText}:${text}`,
+				);
+			}
+			const buffer = new Uint8Array(await response.arrayBuffer());
+			const contentType = response.headers.get("content-type") ?? undefined;
+			const sizeHeader = response.headers.get("content-length");
+			const size = sizeHeader ? Number(sizeHeader) : undefined;
+			const filename =
+				parseContentDispositionFilename(
+					response.headers.get("content-disposition"),
+				) ?? `attachment-${attachmentId}`;
+			return { buffer, contentType, filename, size };
+		} finally {
+			clearTimeout(timeout);
+		}
 	}
 
 	function getCachedComments(
@@ -256,11 +672,36 @@ export function createTrackerClient(
 		try {
 			switch (toolName) {
 				case "issues_find": {
-					const query = String(args.query ?? "");
+					const queryText =
+						typeof args.query === "string" ? args.query : undefined;
 					const perPage = Number(args.per_page ?? args.perPage ?? 100);
 					const page = Number(args.page ?? 1);
+					const filter =
+						args.filter && typeof args.filter === "object"
+							? (args.filter as Record<string, unknown>)
+							: undefined;
+					const queue = typeof args.queue === "string" ? args.queue : undefined;
+					const keys =
+						Array.isArray(args.keys) || typeof args.keys === "string"
+							? (args.keys as string[] | string)
+							: undefined;
+					const order = typeof args.order === "string" ? args.order : undefined;
+					const expand =
+						typeof args.expand === "string" || Array.isArray(args.expand)
+							? (args.expand as string | string[])
+							: undefined;
+					const fields =
+						typeof args.fields === "string" || Array.isArray(args.fields)
+							? (args.fields as string | string[])
+							: undefined;
 					const result = await trackerIssuesFind({
-						query,
+						query: queryText,
+						filter,
+						queue,
+						keys,
+						order,
+						expand,
+						fields,
 						perPage: Number.isFinite(perPage) ? perPage : 100,
 						page: Number.isFinite(page) ? page : 1,
 						timeoutMs,
@@ -277,7 +718,18 @@ export function createTrackerClient(
 				}
 				case "issue_get": {
 					const issueId = String(args.issue_id ?? "");
-					const result = await trackerIssueGet(issueId, timeoutMs);
+					const expand =
+						typeof args.expand === "string" || Array.isArray(args.expand)
+							? (args.expand as string | string[])
+							: undefined;
+					const fields =
+						typeof args.fields === "string" || Array.isArray(args.fields)
+							? (args.fields as string | string[])
+							: undefined;
+					const result = await trackerIssueGet(issueId, timeoutMs, {
+						expand,
+						fields,
+					});
 					logTrackerAudit(
 						ctx,
 						toolName,
@@ -290,7 +742,12 @@ export function createTrackerClient(
 				}
 				case "issue_get_comments": {
 					const issueId = String(args.issue_id ?? "");
-					const result = await trackerIssueGetComments(issueId, timeoutMs);
+					const perPage = Number(args.per_page ?? args.perPage ?? 100);
+					const page = Number(args.page ?? 1);
+					const result = await trackerIssueGetComments(issueId, timeoutMs, {
+						perPage: Number.isFinite(perPage) ? perPage : 100,
+						page: Number.isFinite(page) ? page : 1,
+					});
 					logTrackerAudit(
 						ctx,
 						toolName,
@@ -312,6 +769,444 @@ export function createTrackerClient(
 						Date.now() - startedAt,
 					);
 					return `https://tracker.yandex.ru/${issueId}` as unknown as T;
+				}
+				case "issue_get_links": {
+					const issueId = String(args.issue_id ?? "");
+					const result = await trackerIssueGetLinks(issueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_get_worklogs": {
+					const issueId = String(args.issue_id ?? "");
+					const result = await trackerIssueGetWorklogs(issueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_get_checklist": {
+					const issueId = String(args.issue_id ?? "");
+					const result = await trackerIssueGetChecklist(issueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_get_transitions": {
+					const issueId = String(args.issue_id ?? "");
+					const result = await trackerIssueGetTransitions(issueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_execute_transition": {
+					const issueId = String(args.issue_id ?? "");
+					const transitionId = String(
+						args.transition_id ?? args.transitionId ?? "",
+					);
+					const body =
+						args.body && typeof args.body === "object"
+							? { ...(args.body as Record<string, unknown>) }
+							: (() => {
+									const copy = { ...args };
+									delete copy.issue_id;
+									delete copy.transition_id;
+									delete copy.transitionId;
+									return copy;
+								})();
+					const result = await trackerIssueExecuteTransition(
+						issueId,
+						transitionId,
+						body,
+						timeoutMs,
+					);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_get_attachments": {
+					const issueId = String(args.issue_id ?? "");
+					const result = await trackerIssueGetAttachments(issueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_create": {
+					const body =
+						args.body && typeof args.body === "object"
+							? (args.body as Record<string, unknown>)
+							: { ...args };
+					const result = await trackerIssueCreate(body, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_update": {
+					const issueId = String(args.issue_id ?? "");
+					const body =
+						args.body && typeof args.body === "object"
+							? (args.body as Record<string, unknown>)
+							: (() => {
+									const copy = { ...args };
+									delete copy.issue_id;
+									return copy;
+								})();
+					const result = await trackerIssueUpdate(issueId, body, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issue_close": {
+					const issueId = String(args.issue_id ?? "");
+					const resolutionId =
+						typeof args.resolution_id === "string"
+							? args.resolution_id
+							: typeof args.resolutionId === "string"
+								? args.resolutionId
+								: typeof args.resolution === "string"
+									? args.resolution
+									: undefined;
+					const comment =
+						typeof args.comment === "string" ? args.comment : undefined;
+					const transitionId =
+						typeof args.transition_id === "string"
+							? args.transition_id
+							: typeof args.transitionId === "string"
+								? args.transitionId
+								: undefined;
+					const transitions = await trackerIssueGetTransitions(
+						issueId,
+						timeoutMs,
+					);
+					const transition =
+						transitionId ||
+						(Array.isArray(transitions)
+							? transitions.find((item) => {
+									const id =
+										typeof item.id === "string" ? item.id.toLowerCase() : "";
+									const toKey =
+										item.to &&
+										typeof (item as { to?: { key?: string } }).to?.key ===
+											"string"
+											? (
+													item as { to?: { key?: string } }
+												).to?.key?.toLowerCase()
+											: "";
+									return (
+										id === "close" ||
+										id.includes("close") ||
+										toKey === "closed" ||
+										toKey === "resolved" ||
+										toKey === "done"
+									);
+								})?.id
+							: undefined);
+					const transitionValue =
+						typeof transition === "string" ? transition : "";
+					if (!transitionValue) throw new Error("close_transition_not_found");
+					const body: Record<string, unknown> = {};
+					if (resolutionId) body.resolution = resolutionId;
+					if (comment) body.comment = comment;
+					const result = await trackerIssueExecuteTransition(
+						issueId,
+						transitionValue,
+						body,
+						timeoutMs,
+					);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "issues_count": {
+					const body =
+						args.body && typeof args.body === "object"
+							? (args.body as Record<string, unknown>)
+							: (() => {
+									const copy: Record<string, unknown> = {};
+									if (args.filter && typeof args.filter === "object") {
+										copy.filter = args.filter;
+									}
+									if (typeof args.query === "string") {
+										copy.query = args.query;
+									}
+									return copy;
+								})();
+					const result = await trackerIssuesCount(body, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "queues_get_all": {
+					const perPage = Number(args.per_page ?? args.perPage ?? 50);
+					const page = Number(args.page ?? 1);
+					const expand =
+						typeof args.expand === "string" || Array.isArray(args.expand)
+							? (args.expand as string | string[])
+							: undefined;
+					const result = await trackerQueuesGetAll({
+						perPage: Number.isFinite(perPage) ? perPage : 50,
+						page: Number.isFinite(page) ? page : 1,
+						expand,
+						timeoutMs,
+					});
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "queue_get_metadata": {
+					const queueId = String(args.queue_id ?? args.queueId ?? "");
+					const expand =
+						typeof args.expand === "string" || Array.isArray(args.expand)
+							? (args.expand as string | string[])
+							: undefined;
+					const result = await trackerQueueGetMetadata({
+						queueId,
+						expand,
+						timeoutMs,
+					});
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "queue_get_tags": {
+					const queueId = String(args.queue_id ?? args.queueId ?? "");
+					const result = await trackerQueueGetTags(queueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "queue_get_versions": {
+					const queueId = String(args.queue_id ?? args.queueId ?? "");
+					const result = await trackerQueueGetVersions(queueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "queue_get_fields": {
+					const queueId = String(args.queue_id ?? args.queueId ?? "");
+					const result = await trackerQueueGetFields(queueId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "users_get_all": {
+					const perPage = Number(args.per_page ?? args.perPage ?? 50);
+					const page = Number(args.page ?? 1);
+					const result = await trackerUsersGetAll({
+						perPage: Number.isFinite(perPage) ? perPage : 50,
+						page: Number.isFinite(page) ? page : 1,
+						timeoutMs,
+					});
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "user_get": {
+					const userId = String(args.user_id ?? args.userId ?? "");
+					const result = await trackerUserGet(userId, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "user_get_current": {
+					const result = await trackerUserGetCurrent(timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "users_search": {
+					const needle =
+						typeof args.login_or_email_or_name === "string"
+							? args.login_or_email_or_name
+							: typeof args.query === "string"
+								? args.query
+								: "";
+					const perPage = Number(args.per_page ?? args.perPage ?? 50);
+					const page = Number(args.page ?? 1);
+					const result = await trackerUsersSearch({
+						needle,
+						perPage: Number.isFinite(perPage) ? perPage : 50,
+						page: Number.isFinite(page) ? page : 1,
+						timeoutMs,
+					});
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "get_global_fields": {
+					const result = await trackerGetGlobalFields(timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "get_statuses": {
+					const result = await trackerGetStatuses(timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "get_issue_types": {
+					const result = await trackerGetIssueTypes(timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "get_priorities": {
+					const localized =
+						typeof args.localized === "boolean" ? args.localized : undefined;
+					const result = await trackerGetPriorities(localized, timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
+				}
+				case "get_resolutions": {
+					const result = await trackerGetResolutions(timeoutMs);
+					logTrackerAudit(
+						ctx,
+						toolName,
+						args,
+						"success",
+						undefined,
+						Date.now() - startedAt,
+					);
+					return result as T;
 				}
 				default:
 					throw new Error(`unknown_tool:${toolName}`);
@@ -381,6 +1276,7 @@ export function createTrackerClient(
 		trackerCallTool,
 		trackerHealthCheck,
 		getLastTrackerCallAt: () => lastTrackerCallAt,
+		downloadAttachment: trackerDownloadAttachment,
 		fetchCommentsWithBudget,
 	};
 }

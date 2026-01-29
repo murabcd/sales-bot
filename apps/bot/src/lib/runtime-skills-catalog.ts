@@ -4,12 +4,6 @@ import { POSTHOG_READONLY_TOOL_NAMES } from "./posthog-tools.js";
 export function buildBuiltinRuntimeSkills(): RuntimeSkill[] {
 	const skills: RuntimeSkill[] = [
 		{
-			name: "tracker_search",
-			description:
-				"Search Yandex Tracker issues using keywords from the question.",
-			tool: "tracker.tracker_search",
-		},
-		{
 			name: "web_search",
 			description: "Search the web for up-to-date information.",
 			tool: "web.web_search",

@@ -1,11 +1,11 @@
 ---
 name: yandex-tracker
-description: Tracker tools map + usage notes for Yandex Tracker.
+description: Yandex Tracker tools map + usage notes for Yandex Tracker.
 ---
 
 # yandex-tracker
 
-This skill documents the Tracker tools exposed by the bot and how to use them via runtime skills.
+This skill documents the Yandex Tracker tools exposed by the bot and how to use them via runtime skills.
 
 Quick start
 - Telegram: `/skill <name> <json>`
@@ -14,7 +14,7 @@ Runtime skills
 - Each tool can be wrapped as a runtime skill in `apps/bot/skills/<name>/skill.json`.
 - The `tool` field supports `yandex-tracker.<tool_name>`.
 
-Available Tracker tools
+Available Yandex Tracker tools
 
 Queue Management
 - `queues_get_all`
