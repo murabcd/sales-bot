@@ -1,4 +1,4 @@
-import { resolveToolRef, type RuntimeSkill } from "../../skills-core.js";
+import { type RuntimeSkill, resolveToolRef } from "../../skills-core.js";
 
 const SKILL_PATH_BY_SERVER: Record<string, string> = {
 	"yandex-tracker": "apps/bot/skills/yandex-tracker/SKILL.md",
@@ -24,7 +24,10 @@ const SKILL_DESCRIPTION_BY_SERVER: Record<string, string> = {
 
 export function buildSkillsPrompt(skills: RuntimeSkill[]) {
 	if (skills.length === 0) return "";
-	const servers = new Map<string, { name: string; description: string; path: string }>();
+	const servers = new Map<
+		string,
+		{ name: string; description: string; path: string }
+	>();
 	for (const skill of skills) {
 		const { server } = resolveToolRef(skill.tool);
 		const path = SKILL_PATH_BY_SERVER[server];

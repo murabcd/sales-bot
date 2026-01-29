@@ -141,7 +141,7 @@ export function buildAgentInstructions(
 
 	if (options.toolLines.includes("google_public_doc_read")) {
 		toolSections.push(
-			"- Use `google_public_doc_read`/`google_public_sheet_read` for publicly shared Google Docs/Sheets links (no OAuth).",
+			"- Use `google_public_doc_read`/`google_public_sheet_read`/`google_public_slides_read` for publicly shared Google Docs/Sheets/Slides links (no OAuth).",
 		);
 	}
 
