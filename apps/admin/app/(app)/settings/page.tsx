@@ -49,6 +49,7 @@ export default function SettingsPage() {
 				<TabsList>
 					<TabsTrigger value="telegram">Telegram</TabsTrigger>
 					<TabsTrigger value="cron">Cron</TabsTrigger>
+					<TabsTrigger value="models">Models</TabsTrigger>
 					<TabsTrigger value="security">Security</TabsTrigger>
 				</TabsList>
 
@@ -181,17 +182,57 @@ export default function SettingsPage() {
 										updateConfigField("CRON_STATUS_SUMMARY_MODEL", value)
 									}
 								/>
-								<Field
-									label="Default model (OPENAI_MODEL)"
-									value={config.OPENAI_MODEL ?? ""}
-									placeholder="gpt-5.2"
-									onChange={(value) => updateConfigField("OPENAI_MODEL", value)}
-								/>
 							</div>
 						</CardContent>
 						<CardFooter>
 							<span>Use 0 for max items to show all items.</span>
 						</CardFooter>
+					</Card>
+				</TabsContent>
+
+				{/* Models Tab */}
+				<TabsContent value="models">
+					<Card>
+						<CardHeader>
+							<CardTitle>Models</CardTitle>
+							<CardDescription>
+								Configure default model and sub-agent overrides.
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<div className="grid gap-6 md:grid-cols-2">
+								<Field
+									label="Default model"
+									value={config.OPENAI_MODEL ?? ""}
+									placeholder="gpt-5.2"
+									onChange={(value) => updateConfigField("OPENAI_MODEL", value)}
+								/>
+								<Field
+									label="Summary model"
+									value={config.CRON_STATUS_SUMMARY_MODEL ?? ""}
+									placeholder="gpt-4o-mini"
+									onChange={(value) =>
+										updateConfigField("CRON_STATUS_SUMMARY_MODEL", value)
+									}
+								/>
+								<Field
+									label="Sub-agent model provider"
+									value={config.SUBAGENT_MODEL_PROVIDER ?? ""}
+									placeholder="openai | google"
+									onChange={(value) =>
+										updateConfigField("SUBAGENT_MODEL_PROVIDER", value)
+									}
+								/>
+								<Field
+									label="Sub-agent model ID"
+									value={config.SUBAGENT_MODEL_ID ?? ""}
+									placeholder="gemini-2.5-flash"
+									onChange={(value) =>
+										updateConfigField("SUBAGENT_MODEL_ID", value)
+									}
+								/>
+							</div>
+						</CardContent>
 					</Card>
 				</TabsContent>
 
