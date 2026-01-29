@@ -216,13 +216,7 @@ export function registerCommands(deps: CommandDeps) {
 				"— /status — проверить работу бота\n" +
 				"— /cron — управление расписаниями\n" +
 				"— /timezone — установить или посмотреть часовой пояс\n" +
-				"— /help — описание возможностей\n\n" +
-				"Примеры cron:\n" +
-				"— /cron list\n" +
-				"— /cron run <id|name>\n" +
-				"— /cron stop <id|name>\n" +
-				"— /cron edit <id|name> every 60\n" +
-				"— /cron edit <id|name> cron 0 11 * * * Europe/Moscow",
+				"— /help — описание возможностей\n\n",
 		);
 	}
 
