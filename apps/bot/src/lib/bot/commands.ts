@@ -163,7 +163,7 @@ export function registerCommands(deps: CommandDeps) {
 				"— /status — проверить работу бота\n" +
 				"— /help — эта справка\n\n" +
 				"Просто спросите, например:\n" +
-				'"Какой статус у PROJ-1234? в Tracker"\n' +
+				'"Какой статус у PROJ-1234? в Yandex Tracker"\n' +
 				'"Дай топ-5 компаний активных в чатботах из Posthog?"\n' +
 				'"Есть ли блокеры в текущем спринте в Jira?"\n' +
 				'"Найди в интернете ближайшие HR-конференции в РФ"',
@@ -425,7 +425,6 @@ export function registerCommands(deps: CommandDeps) {
 		}
 		const ALLOWED_SKILL_SERVERS = new Set([
 			"yandex-tracker",
-			"tracker",
 			"jira",
 			"web",
 			"memory",
@@ -437,18 +436,26 @@ export function registerCommands(deps: CommandDeps) {
 		}
 
 		try {
-			const result = await trackerCallTool(
-				tool,
-				mergedArgs,
-				skill.timeoutMs ?? 8_000,
-				ctx,
-			);
-			const text = formatToolResult(result);
-			if (text) {
-				await sendText(ctx, text);
+			if (server === "yandex-tracker" || server === "tracker") {
+				const result = await trackerCallTool(
+					tool,
+					mergedArgs,
+					skill.timeoutMs ?? 8_000,
+					ctx,
+				);
+				const text = formatToolResult(result);
+				if (text) {
+					await sendText(ctx, text);
+					return;
+				}
+				await sendText(ctx, "Skill выполнился, но не вернул текст.");
 				return;
 			}
-			await sendText(ctx, "Skill выполнился, но не вернул текст.");
+			await sendText(
+				ctx,
+				`Инструменты сервера ${server} пока не поддерживаются в /skill.`,
+			);
+			return;
 		} catch (error) {
 			await sendText(ctx, `Ошибка вызова skill: ${String(error)}`);
 		}
@@ -470,7 +477,7 @@ export function registerCommands(deps: CommandDeps) {
 			"Статус:",
 			`— аптайм: ${uptime}`,
 			`— модель: ${getActiveModelRef()}`,
-			`— tracker: ${trackerStatus}`,
+			`— yandex-tracker: ${trackerStatus}`,
 			`— jira: ${jiraEnabled ? "ok" : "не настроен"}`,
 			`— posthog: ${posthogEnabled ? "ok" : "не настроен"}`,
 			`— веб-поиск: ${webSearchEnabled ? "включён" : "выключен"}`,
@@ -490,6 +497,80 @@ export function registerCommands(deps: CommandDeps) {
 			ctx,
 			"Я Omni, персональный ассистент для задач, аналитики и поиска информации.",
 		);
+	});
+
+	const yandexTrackerTools = new Set(
+		runtimeSkills
+			.map((skill) => {
+				const ref = resolveToolRef(skill.tool);
+				if (ref.server !== "yandex-tracker") return null;
+				const normalized = normalizeToolName(ref.tool ?? "");
+				return normalized || null;
+			})
+			.filter((value): value is string => Boolean(value)),
+	);
+
+	bot.command("yandex-tracker", async (ctx) => {
+		setLogContext(ctx, {
+			command: "/yandex-tracker",
+			message_type: "command",
+		});
+		if (
+			isGroupChat(ctx) &&
+			shouldRequireMentionForChannel({
+				channelConfig: ctx.state.channelConfig,
+				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+			})
+		) {
+			const allowReply = isReplyToBotWithoutMention(ctx);
+			if (!allowReply && !isBotMentioned(ctx)) {
+				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+				return;
+			}
+		}
+		const text = ctx.message?.text ?? "";
+		const [, toolName, ...rest] = text.split(" ");
+		if (!toolName) {
+			await sendText(ctx, "Использование: /yandex-tracker <tool> <json>");
+			return;
+		}
+		const normalizedTool = normalizeToolName(toolName);
+		setLogContext(ctx, { tool: normalizedTool });
+		if (
+			yandexTrackerTools.size > 0 &&
+			!yandexTrackerTools.has(normalizedTool)
+		) {
+			await sendText(
+				ctx,
+				`Неподдерживаемый инструмент: ${toolName}. Используйте: ${Array.from(
+					yandexTrackerTools,
+				).join(", ")}`,
+			);
+			return;
+		}
+
+		const rawArgs = rest.join(" ").trim();
+		let args: Record<string, unknown> = {};
+		if (rawArgs) {
+			try {
+				args = JSON.parse(rawArgs) as Record<string, unknown>;
+			} catch (error) {
+				await sendText(ctx, `Некорректный JSON: ${String(error)}`);
+				return;
+			}
+		}
+
+		try {
+			const result = await trackerCallTool(normalizedTool, args, 8_000, ctx);
+			const text = formatToolResult(result);
+			if (text) {
+				await sendText(ctx, text);
+				return;
+			}
+			await sendText(ctx, "Инструмент выполнился, но не вернул текст.");
+		} catch (error) {
+			await sendText(ctx, `Ошибка вызова инструмента: ${String(error)}`);
+		}
 	});
 
 	async function safeAnswerCallback(ctx: {
@@ -538,66 +619,5 @@ export function registerCommands(deps: CommandDeps) {
 	bot.on("callback_query:data", async (ctx) => {
 		setLogContext(ctx, { message_type: "callback" });
 		await safeAnswerCallback(ctx);
-	});
-
-	bot.command("tracker", async (ctx) => {
-		setLogContext(ctx, { command: "/tracker", message_type: "command" });
-		const SUPPORTED_TRACKER_TOOLS = new Set([
-			"issues_find",
-			"issue_get",
-			"issue_get_comments",
-			"issue_get_url",
-		]);
-		if (
-			isGroupChat(ctx) &&
-			shouldRequireMentionForChannel({
-				channelConfig: ctx.state.channelConfig,
-				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
-			})
-		) {
-			const allowReply = isReplyToBotWithoutMention(ctx);
-			if (!allowReply && !isBotMentioned(ctx)) {
-				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-				return;
-			}
-		}
-		const text = ctx.message?.text ?? "";
-		const [, toolName, ...rest] = text.split(" ");
-		if (!toolName) {
-			await sendText(ctx, "Использование: /tracker <tool> <json>");
-			return;
-		}
-		setLogContext(ctx, { tool: toolName });
-
-		if (!SUPPORTED_TRACKER_TOOLS.has(toolName)) {
-			await sendText(
-				ctx,
-				`Неподдерживаемый инструмент: ${toolName}. Используйте: ${Array.from(SUPPORTED_TRACKER_TOOLS).join(", ")}`,
-			);
-			return;
-		}
-
-		const rawArgs = rest.join(" ").trim();
-		let args: Record<string, unknown> = {};
-		if (rawArgs) {
-			try {
-				args = JSON.parse(rawArgs) as Record<string, unknown>;
-			} catch (error) {
-				await sendText(ctx, `Некорректный JSON: ${String(error)}`);
-				return;
-			}
-		}
-
-		try {
-			const result = await trackerCallTool(toolName, args, 8_000, ctx);
-			const text = formatToolResult(result);
-			if (text) {
-				await sendText(ctx, text);
-				return;
-			}
-			await sendText(ctx, "Инструмент выполнился, но не вернул текст.");
-		} catch (error) {
-			await sendText(ctx, `Ошибка вызова инструмента: ${String(error)}`);
-		}
 	});
 }

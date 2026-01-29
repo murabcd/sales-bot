@@ -11,6 +11,7 @@ export type IssueAgentOptions = {
 	issueKey: string;
 	issueText: string;
 	commentsText: string;
+	extraContext?: string;
 	modelId: string;
 	userName?: string;
 	globalSoul?: string;
@@ -29,6 +30,7 @@ export async function createIssueAgent(
 		issueKey: options.issueKey,
 		issueText: options.issueText,
 		commentsText: options.commentsText,
+		extraContext: options.extraContext,
 		userName: options.userName,
 		globalSoul: options.globalSoul,
 		channelSoul: options.channelSoul,

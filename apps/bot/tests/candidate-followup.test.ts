@@ -6,7 +6,7 @@ const instructionsBase = {
 	modelRef: "gpt-5.2",
 	modelName: "GPT-5.2",
 	reasoning: "standard",
-	toolLines: "tracker_search - search",
+	toolLines: "yandex_tracker_search - search",
 };
 
 describe("recent candidates instructions", () => {
@@ -20,7 +20,7 @@ describe("recent candidates instructions", () => {
 		});
 		expect(instructions).toContain("Recent candidates");
 		expect(instructions).toContain("PROJ-2961");
-		expect(instructions).toContain("do NOT run tracker_search");
+		expect(instructions).toContain("do NOT run yandex_tracker_search");
 	});
 
 	it("includes custom system prompt content", () => {

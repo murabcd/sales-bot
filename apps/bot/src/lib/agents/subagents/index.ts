@@ -3,7 +3,7 @@ import { POSTHOG_READONLY_TOOL_NAMES } from "../../posthog-tools.js";
 import { pickTools } from "./tools.js";
 
 export function buildTrackerTools(allTools: ToolSet): ToolSet {
-	return pickTools(allTools, ["tracker_search"]);
+	return pickTools(allTools, ["yandex_tracker_search"]);
 }
 
 export function buildJiraTools(allTools: ToolSet): ToolSet {
