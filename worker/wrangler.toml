@@ -84,3 +84,11 @@ new_sqlite_classes = ["SessionsDO", "CronDO"]
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["ChannelsDO"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["WikiIndexDO"]
+
+[[migrations]]
+tag = "v6"
+deleted_classes = ["WikiIndexDO"]

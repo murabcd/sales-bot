@@ -100,6 +100,148 @@ const DEFAULT_FORM: CronFormState = {
 	postToMainMaxChars: "",
 };
 
+function formatLocalDatetimeInput(atMs: number) {
+	const date = new Date(atMs);
+	const pad = (value: number) => String(value).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+		date.getDate(),
+	)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function scheduleToForm(
+	job: CronJob,
+): Pick<
+	CronFormState,
+	| "scheduleKind"
+	| "scheduleAt"
+	| "everyAmount"
+	| "everyUnit"
+	| "cronExpr"
+	| "cronTz"
+> {
+	if (job.schedule.kind === "at") {
+		return {
+			scheduleKind: "at",
+			scheduleAt: formatLocalDatetimeInput(job.schedule.atMs),
+			everyAmount: DEFAULT_FORM.everyAmount,
+			everyUnit: DEFAULT_FORM.everyUnit,
+			cronExpr: DEFAULT_FORM.cronExpr,
+			cronTz: DEFAULT_FORM.cronTz,
+		};
+	}
+	if (job.schedule.kind === "every") {
+		const everyMs = job.schedule.everyMs;
+		const dayMs = 86_400_000;
+		const hourMs = 3_600_000;
+		const minuteMs = 60_000;
+		if (everyMs % dayMs === 0) {
+			return {
+				scheduleKind: "every",
+				scheduleAt: DEFAULT_FORM.scheduleAt,
+				everyAmount: String(Math.max(1, Math.floor(everyMs / dayMs))),
+				everyUnit: "days",
+				cronExpr: DEFAULT_FORM.cronExpr,
+				cronTz: DEFAULT_FORM.cronTz,
+			};
+		}
+		if (everyMs % hourMs === 0) {
+			return {
+				scheduleKind: "every",
+				scheduleAt: DEFAULT_FORM.scheduleAt,
+				everyAmount: String(Math.max(1, Math.floor(everyMs / hourMs))),
+				everyUnit: "hours",
+				cronExpr: DEFAULT_FORM.cronExpr,
+				cronTz: DEFAULT_FORM.cronTz,
+			};
+		}
+		return {
+			scheduleKind: "every",
+			scheduleAt: DEFAULT_FORM.scheduleAt,
+			everyAmount: String(Math.max(1, Math.floor(everyMs / minuteMs))),
+			everyUnit: "minutes",
+			cronExpr: DEFAULT_FORM.cronExpr,
+			cronTz: DEFAULT_FORM.cronTz,
+		};
+	}
+	return {
+		scheduleKind: "cron",
+		scheduleAt: DEFAULT_FORM.scheduleAt,
+		everyAmount: DEFAULT_FORM.everyAmount,
+		everyUnit: DEFAULT_FORM.everyUnit,
+		cronExpr: job.schedule.expr ?? DEFAULT_FORM.cronExpr,
+		cronTz: job.schedule.tz ?? "",
+	};
+}
+
+function payloadToForm(
+	job: CronJob,
+): Pick<
+	CronFormState,
+	| "payloadKind"
+	| "payloadText"
+	| "payloadModel"
+	| "deliver"
+	| "channel"
+	| "to"
+	| "timeoutSeconds"
+> {
+	if (job.payload.kind === "systemEvent") {
+		return {
+			payloadKind: "systemEvent",
+			payloadText: job.payload.text ?? "",
+			payloadModel: "",
+			deliver: false,
+			channel: "last",
+			to: "",
+			timeoutSeconds: "",
+		};
+	}
+	if (job.payload.kind === "dailyStatus") {
+		return {
+			payloadKind: "dailyStatus",
+			payloadText: "",
+			payloadModel: "",
+			deliver: false,
+			channel: "last",
+			to: job.payload.to ?? "",
+			timeoutSeconds: "",
+		};
+	}
+	return {
+		payloadKind: "agentTurn",
+		payloadText: job.payload.message ?? "",
+		payloadModel: job.payload.model ?? "",
+		deliver: job.payload.deliver === true,
+		channel: job.payload.channel ?? "last",
+		to: job.payload.to ?? "",
+		timeoutSeconds: job.payload.timeoutSeconds
+			? String(job.payload.timeoutSeconds)
+			: "",
+	};
+}
+
+function jobToForm(job: CronJob): CronFormState {
+	const schedule = scheduleToForm(job);
+	const payload = payloadToForm(job);
+	return {
+		...DEFAULT_FORM,
+		name: job.name ?? "",
+		description: job.description ?? "",
+		agentId: job.agentId ?? "",
+		enabled: job.enabled,
+		sessionTarget: job.sessionTarget ?? "main",
+		wakeMode: job.wakeMode ?? "next-heartbeat",
+		postToMainPrefix: job.isolation?.postToMainPrefix ?? "",
+		postToMainMode: job.isolation?.postToMainMode ?? "summary",
+		postToMainMaxChars:
+			typeof job.isolation?.postToMainMaxChars === "number"
+				? String(job.isolation?.postToMainMaxChars)
+				: "",
+		...schedule,
+		...payload,
+	};
+}
+
 function buildCronSchedule(form: CronFormState) {
 	if (form.scheduleKind === "at") {
 		const ms = Date.parse(form.scheduleAt);
@@ -173,6 +315,7 @@ export default function CronPage() {
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [form, setForm] = useState<CronFormState>(() => ({ ...DEFAULT_FORM }));
+	const [editJobId, setEditJobId] = useState<string | null>(null);
 	const [runsJobId, setRunsJobId] = useState<string | null>(null);
 	const [runs, setRuns] = useState<CronRunLogEntry[]>([]);
 
@@ -254,6 +397,70 @@ export default function CronPage() {
 			setBusy(false);
 		}
 	}, [busy, cronAdd, form, refresh]);
+
+	const updateJob = useCallback(async () => {
+		if (!editJobId || busy) return;
+		setBusy(true);
+		setError(null);
+		try {
+			const schedule = buildCronSchedule(form);
+			const payload = buildCronPayload(form);
+			if (
+				form.sessionTarget === "main" &&
+				payload.kind !== "systemEvent" &&
+				payload.kind !== "dailyStatus"
+			) {
+				throw new Error(
+					'Main jobs require payload kind "systemEvent" or "dailyStatus".',
+				);
+			}
+			if (form.sessionTarget === "isolated" && payload.kind !== "agentTurn") {
+				throw new Error('Isolated jobs require payload kind "agentTurn".');
+			}
+			const agentId = form.agentId.trim();
+			const patch = {
+				name: form.name.trim(),
+				description: form.description.trim() || undefined,
+				agentId: agentId || undefined,
+				enabled: form.enabled,
+				schedule,
+				sessionTarget: form.sessionTarget,
+				wakeMode: form.wakeMode,
+				payload,
+				isolation:
+					form.sessionTarget === "isolated" &&
+					(form.postToMainPrefix.trim() ||
+						form.postToMainMode ||
+						form.postToMainMaxChars)
+						? {
+								postToMainPrefix: form.postToMainPrefix.trim() || "Cron:",
+								postToMainMode: form.postToMainMode,
+								postToMainMaxChars:
+									toNumber(form.postToMainMaxChars, 0) || undefined,
+							}
+						: undefined,
+			};
+			if (!patch.name) throw new Error("Name required.");
+			await cronUpdate({ id: editJobId, patch });
+			setForm({ ...DEFAULT_FORM });
+			setEditJobId(null);
+			await refresh();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(false);
+		}
+	}, [busy, cronUpdate, editJobId, form, refresh]);
+
+	const startEdit = useCallback((job: CronJob) => {
+		setForm(jobToForm(job));
+		setEditJobId(job.id);
+	}, []);
+
+	const cancelEdit = useCallback(() => {
+		setForm({ ...DEFAULT_FORM });
+		setEditJobId(null);
+	}, []);
 
 	const toggleJob = useCallback(
 		async (job: CronJob, enabled: boolean) => {
@@ -375,9 +582,13 @@ export default function CronPage() {
 
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">New Job</CardTitle>
+						<CardTitle className="text-base">
+							{editJobId ? "Edit Job" : "New Job"}
+						</CardTitle>
 						<CardDescription>
-							Create a scheduled wakeup or agent run.
+							{editJobId
+								? "Update the selected cron job."
+								: "Create a scheduled wakeup or agent run."}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-3">
@@ -815,9 +1026,14 @@ export default function CronPage() {
 						) : null}
 
 						<div className="flex items-center gap-2">
-							<Button onClick={addJob} disabled={busy}>
-								{busy ? "Saving…" : "Add job"}
+							<Button onClick={editJobId ? updateJob : addJob} disabled={busy}>
+								{busy ? "Saving…" : editJobId ? "Update job" : "Add job"}
 							</Button>
+							{editJobId ? (
+								<Button variant="outline" onClick={cancelEdit} disabled={busy}>
+									Cancel
+								</Button>
+							) : null}
 						</div>
 					</CardContent>
 				</Card>
@@ -905,6 +1121,17 @@ export default function CronPage() {
 													}}
 												>
 													Run
+												</Button>
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={busy}
+													onClick={(event) => {
+														event.stopPropagation();
+														startEdit(job);
+													}}
+												>
+													Edit
 												</Button>
 												<AlertDialog>
 													<AlertDialogTrigger asChild>
