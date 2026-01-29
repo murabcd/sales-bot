@@ -227,6 +227,9 @@ async function getBot(env: Record<string, string | undefined>) {
 			const sessionClient = {
 				get: async (params: { key: string }) => {
 					const response = await callSessions(env as Env, "/get", params);
+					if (response.status === 404) {
+						return { ok: true, entry: undefined };
+					}
 					if (!response.ok) {
 						throw new Error("sessions_get_failed");
 					}
