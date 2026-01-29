@@ -45,6 +45,9 @@ This starts long‑polling and ignores the webhook.
 Outbound messages are sent as Telegram HTML. The bot converts `**bold**`
 to `<b>bold</b>` and escapes other HTML for safety.
 
+Transient send errors are retried with backoff. If Telegram rejects the HTML
+formatting, the bot falls back to plain text.
+
 ## Attachments
 
 - Images are supported from `message:photo`.

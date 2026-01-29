@@ -630,6 +630,36 @@ async function handleHealthCheck(env: Env): Promise<Response> {
 	);
 }
 
+async function handleTelegramHealthCheck(env: Env): Promise<Response> {
+	const token = env.BOT_TOKEN?.trim();
+	if (!token) {
+		return new Response(
+			JSON.stringify({ ok: false, error: "BOT_TOKEN is unset" }),
+			{ status: 500, headers: { "Content-Type": "application/json" } },
+		);
+	}
+	const url = `https://api.telegram.org/bot${token}/getMe`;
+	try {
+		const start = Date.now();
+		const response = await withTimeout(fetch(url), 10_000);
+		const body = await response.text();
+		return new Response(
+			JSON.stringify({
+				ok: response.ok,
+				status: response.status,
+				latencyMs: Date.now() - start,
+				body,
+			}),
+			{ status: response.ok ? 200 : 503, headers: { "Content-Type": "application/json" } },
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ ok: false, error: String(error) }),
+			{ status: 503, headers: { "Content-Type": "application/json" } },
+		);
+	}
+}
+
 export default {
 	async fetch(
 		request: WorkerRequest,
@@ -640,6 +670,10 @@ export default {
 
 		if (url.pathname === "/health") {
 			return toWorkerResponse(await handleHealthCheck(env));
+		}
+
+		if (url.pathname === "/health/telegram") {
+			return toWorkerResponse(await handleTelegramHealthCheck(env));
 		}
 
 		if (url.pathname.startsWith("/media/") && request.method === "GET") {

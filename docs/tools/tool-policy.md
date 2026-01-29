@@ -73,7 +73,7 @@ Omni emits status messages in Telegram/Admin chat when slow tools are running:
 - `yandex_tracker_*` → "Проверяю в Yandex Tracker…"
 - `jira_*` → "Проверяю в Jira…"
 - `yandex_wiki_*` → "Ищу в Yandex Wiki…"
-- `google_public_doc_read` / `google_public_sheet_read` → "Читаю Google Docs/Sheets…"
+- `google_public_doc_read` / `google_public_sheet_read` → "Читаю ссылку…"
 - `figma_*` → "Смотрю в Figma…"
 - `posthog_*` (readonly) → "Смотрю аналитику…"
 - `searchMemories` / `addMemory` → "Смотрю историю…"

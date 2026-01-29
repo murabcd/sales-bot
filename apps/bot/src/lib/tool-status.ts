@@ -26,7 +26,7 @@ export function createToolStatusHandler(
 	const memoryMessage = options.memoryMessage ?? "Смотрю историю…";
 	const cronMessage = options.cronMessage ?? "Настраиваю расписание…";
 	const wikiMessage = options.wikiMessage ?? "Ищу в Yandex Wiki…";
-	const googleMessage = options.googleMessage ?? "Читаю Google Docs/Sheets…";
+	const googleMessage = options.googleMessage ?? "Читаю ссылку…";
 	const figmaMessage = options.figmaMessage ?? "Смотрю в Figma…";
 	const toolStatusSent = new Set<string>();
 	const toolStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
