@@ -50,7 +50,9 @@ to `<b>bold</b>` and escapes other HTML for safety.
 - Images are supported from `message:photo`.
 - PDF documents are supported from `message:document`.
 - Non-PDF documents are ignored (reply: "Поддерживаются только PDF документы.").
+- Tracker issue attachments (PDF/DOCX) are offered after the first answer and read only with explicit consent.
 
 Limits:
 - `IMAGE_MAX_BYTES` (default: 5MB)
 - `DOCUMENT_MAX_BYTES` (default: 10MB)
+- `ATTACHMENT_MAX_BYTES` (default: 8MB, max size to read Tracker attachments)

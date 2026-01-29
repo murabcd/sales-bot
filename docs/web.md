@@ -1,7 +1,7 @@
 # Web Search
 
 This bot can optionally use OpenAI's native web search tool to answer
-up-to-date questions outside Tracker (news, public facts, prices).
+up-to-date questions outside Yandex Tracker (news, public facts, prices).
 
 ## Enable
 
@@ -23,4 +23,4 @@ WEB_SEARCH_CONTEXT_SIZE=low
 ## Notes
 
 - Requires an OpenAI model that supports the native web search tool.
-- This is separate from Tracker tools; it is only for public, external info.
+- This is separate from Yandex Tracker tools; it is only for public, external info.

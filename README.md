@@ -41,10 +41,14 @@
   - Read-only file metadata, nodes, comments, and project listings
   - Personal access token auth
 - [Google Docs/Sheets (public)](https://developers.google.com/docs/api)
-  - Read public Docs/Sheets by shared link (no OAuth)
+	- Read public Docs/Sheets by shared link (no OAuth)
+	- Read-only export access; no write or private file support
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
   - Serverless webhook hosting with global edge execution
   - Durable Objects for reliable update processing with retries
+- [Cloudflare R2](https://developers.cloudflare.com/r2/)
+	- Stores generated images for admin chat + Telegram
+	- Serves public image URLs for outbound messages
 
 ## Model Providers
 
@@ -74,15 +78,18 @@ npx wrangler secret put POSTHOG_PERSONAL_API_KEY --config worker/wrangler.toml
 npx wrangler secret put FIGMA_TOKEN --config worker/wrangler.toml
 npx wrangler secret put OPENAI_API_KEY --config worker/wrangler.toml
 npx wrangler secret put SUPERMEMORY_API_KEY --config worker/wrangler.toml
+npx wrangler secret put IMAGE_SIGNING_SECRET --config worker/wrangler.toml
 ```
 
-3) Deploy
+3) Create R2 bucket (name: `omni`)
+
+4) Deploy
 
 ```
 npx wrangler deploy --config worker/wrangler.toml
 ```
 
-4) Set Telegram webhook
+5) Set Telegram webhook
 
 ```
 https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://<your-worker>.workers.dev/telegram

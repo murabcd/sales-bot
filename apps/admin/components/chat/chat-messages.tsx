@@ -153,66 +153,63 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 								<div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground mt-0.5">
 									<Icons.sparkles className="size-3" />
 								</div>
-								<div className="flex-1 min-w-0">
-									<MessageContent>
-										<MessageResponse>{text}</MessageResponse>
-										{toolParts.map((part, i) => {
-											const tools = Array.isArray(part.data?.tools)
-												? part.data.tools.join(", ")
-												: "";
-											if (!tools) return null;
+							<div className="flex-1 min-w-0">
+								{toolCallParts.length > 0 ? (
+									<div className="space-y-2 mt-2">
+										{toolCallParts.map((part, index) => {
+											const toolKey =
+												typeof part.toolCallId === "string"
+													? part.toolCallId
+													: `${message.id}-${index}`;
+											const toolTitle =
+												part.type === "dynamic-tool"
+													? part.toolName
+													: part.type.split("-").slice(1).join("-");
 											return (
-												<div
-													key={`${message.id}-tools-${i}`}
-													className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
-												>
-													Tools: {tools}
-												</div>
+												<Tool defaultOpen={false} key={toolKey}>
+													{part.type === "dynamic-tool" ? (
+														<ToolHeader
+															state={part.state}
+															title={toolTitle}
+															type="dynamic-tool"
+															toolName={part.toolName}
+														/>
+													) : (
+														<ToolHeader
+															state={part.state}
+															title={toolTitle}
+															type={part.type}
+														/>
+													)}
+													<ToolContent>
+														<ToolInput input={part.input ?? {}} />
+														<ToolOutput
+															errorText={part.errorText}
+															output={part.output as React.ReactNode}
+														/>
+													</ToolContent>
+												</Tool>
 											);
 										})}
-									</MessageContent>
-									{toolCallParts.length > 0 ? (
-										<div className="space-y-2 mt-2">
-											{toolCallParts.map((part, index) => {
-												const toolKey =
-													typeof part.toolCallId === "string"
-														? part.toolCallId
-														: `${message.id}-${index}`;
-												const toolTitle =
-													part.type === "dynamic-tool"
-														? part.toolName
-														: part.type.split("-").slice(1).join("-");
-												return (
-													<Tool
-														defaultOpen={part.state !== "output-available"}
-														key={toolKey}
-													>
-														{part.type === "dynamic-tool" ? (
-															<ToolHeader
-																state={part.state}
-																title={toolTitle}
-																type="dynamic-tool"
-																toolName={part.toolName}
-															/>
-														) : (
-															<ToolHeader
-																state={part.state}
-																title={toolTitle}
-																type={part.type}
-															/>
-														)}
-														<ToolContent>
-															<ToolInput input={part.input ?? {}} />
-															<ToolOutput
-																errorText={part.errorText}
-																output={part.output as React.ReactNode}
-															/>
-														</ToolContent>
-													</Tool>
-												);
-											})}
-										</div>
-									) : null}
+									</div>
+								) : null}
+								<MessageContent>
+									<MessageResponse>{text}</MessageResponse>
+									{toolParts.map((part, i) => {
+										const tools = Array.isArray(part.data?.tools)
+											? part.data.tools.join(", ")
+											: "";
+										if (!tools) return null;
+										return (
+											<div
+												key={`${message.id}-tools-${i}`}
+												className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
+											>
+												Tools: {tools}
+											</div>
+										);
+									})}
+								</MessageContent>
 									{sources.length > 0 ? (
 										<Sources>
 											<SourcesTrigger count={sources.length} />
