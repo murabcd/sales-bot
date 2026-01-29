@@ -16,6 +16,7 @@ export type BotEnvConfig = {
 	POSTHOG_PERSONAL_API_KEY: string;
 	POSTHOG_API_BASE_URL: string;
 	OPENAI_API_KEY?: string;
+	GEMINI_API_KEY?: string;
 	OPENAI_MODEL: string;
 	SOUL_PROMPT: string;
 	ALLOWED_TG_IDS: string;
@@ -38,6 +39,7 @@ export type BotEnvConfig = {
 	TELEGRAM_GROUP_REQUIRE_MENTION: boolean;
 	IMAGE_MAX_BYTES: number;
 	DOCUMENT_MAX_BYTES: number;
+	ATTACHMENT_MAX_BYTES: number;
 	WEB_SEARCH_ENABLED: boolean;
 	WEB_SEARCH_CONTEXT_SIZE: string;
 	TOOL_RATE_LIMITS: string;
@@ -83,6 +85,10 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const POSTHOG_API_BASE_URL =
 		env.POSTHOG_API_BASE_URL ?? "https://eu.posthog.com";
 	const OPENAI_API_KEY = env.OPENAI_API_KEY;
+	const GEMINI_API_KEY =
+		env.GEMINI_API_KEY ??
+		env.GOOGLE_GENERATIVE_AI_API_KEY ??
+		env.GOOGLE_API_KEY;
 	const OPENAI_MODEL = env.OPENAI_MODEL ?? "";
 	const SOUL_PROMPT = env.SOUL_PROMPT ?? "";
 	const ALLOWED_TG_IDS = env.ALLOWED_TG_IDS ?? "";
@@ -130,6 +136,10 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const IMAGE_MAX_BYTES = Number.parseInt(env.IMAGE_MAX_BYTES ?? "5000000", 10);
 	const DOCUMENT_MAX_BYTES = Number.parseInt(
 		env.DOCUMENT_MAX_BYTES ?? "10000000",
+		10,
+	);
+	const ATTACHMENT_MAX_BYTES = Number.parseInt(
+		env.ATTACHMENT_MAX_BYTES ?? "8000000",
 		10,
 	);
 	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
@@ -197,6 +207,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		POSTHOG_PERSONAL_API_KEY,
 		POSTHOG_API_BASE_URL,
 		OPENAI_API_KEY,
+		GEMINI_API_KEY,
 		OPENAI_MODEL,
 		SOUL_PROMPT,
 		ALLOWED_TG_IDS,
@@ -219,6 +230,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		TELEGRAM_GROUP_REQUIRE_MENTION,
 		IMAGE_MAX_BYTES,
 		DOCUMENT_MAX_BYTES,
+		ATTACHMENT_MAX_BYTES,
 		WEB_SEARCH_ENABLED,
 		WEB_SEARCH_CONTEXT_SIZE,
 		TOOL_RATE_LIMITS,
