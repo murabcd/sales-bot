@@ -8,6 +8,7 @@
 <p align="center">
   <a href="#features"><strong>Features</strong></a> ·
   <a href="#model-providers"><strong>Model Providers</strong></a> ·
+  <a href="#connectors"><strong>Connectors</strong></a> ·
   <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
   <a href="#customization"><strong>Customization</strong></a> ·
   <a href="#running-locally"><strong>Running locally</strong></a>
@@ -22,6 +23,25 @@
 - [AI SDK](https://sdk.vercel.ai/docs)
   - Unified API for generating text, structured objects, and tool calls with LLMs
   - OpenAI is a primary LLM provider for chat responses
+- [Cloudflare Workers](https://developers.cloudflare.com/workers/)
+  - Serverless webhook hosting with global edge execution
+  - Durable Objects for reliable update processing with retries
+- [Cloudflare R2](https://developers.cloudflare.com/r2/)
+	- Stores generated images for admin chat + Telegram
+	- Serves public image URLs for outbound messages
+
+## Model Providers
+
+This app ships with [OpenAI](https://openai.com/) as the default provider. However, with the [AI SDK](https://sdk.vercel.ai/docs), you can switch LLM providers to [Ollama](https://ollama.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://sdk.vercel.ai/providers/ai-sdk-providers) with just a few lines of code.
+
+- Primary model (`gpt-5.2`): default model for production responses
+- Fallback model (`gpt-4.1`): used if the primary model is unavailable
+
+
+## Connectors
+
+Integration with REST API connectors via [AI SDK](https://sdk.vercel.ai/docs) for accessing external services and APIs. Use available preset connectors or configure your own custom one:
+
 - [Yandex Tracker API](https://yandex.ru/support/tracker/en/)
   - Issue search, status, and comments data
   - Direct HTTP integration with OAuth token auth
@@ -43,19 +63,6 @@
 - [Google Docs/Sheets (public)](https://developers.google.com/docs/api)
 	- Read public Docs/Sheets by shared link (no OAuth)
 	- Read-only export access; no write or private file support
-- [Cloudflare Workers](https://developers.cloudflare.com/workers/)
-  - Serverless webhook hosting with global edge execution
-  - Durable Objects for reliable update processing with retries
-- [Cloudflare R2](https://developers.cloudflare.com/r2/)
-	- Stores generated images for admin chat + Telegram
-	- Serves public image URLs for outbound messages
-
-## Model Providers
-
-This app ships with [OpenAI](https://openai.com/) as the default provider. However, with the [AI SDK](https://sdk.vercel.ai/docs), you can switch LLM providers to [Ollama](https://ollama.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://sdk.vercel.ai/providers/ai-sdk-providers) with just a few lines of code.
-
-- Primary model (`gpt-5.2`): default model for production responses
-- Fallback model (`gpt-4.1`): used if the primary model is unavailable
 
 ## Deploy your own
 
