@@ -101,6 +101,21 @@ function getUptimeSeconds() {
 	return (Date.now() - startTime) / 1000;
 }
 
+function resolveRequiredBotEnv(env: Env) {
+	const missing: string[] = [];
+	if (!env.BOT_TOKEN?.trim()) missing.push("BOT_TOKEN");
+	if (!env.TRACKER_TOKEN?.trim()) missing.push("TRACKER_TOKEN");
+	if (!env.OPENAI_API_KEY?.trim()) missing.push("OPENAI_API_KEY");
+	if (!env.ALLOWED_TG_IDS?.trim()) missing.push("ALLOWED_TG_IDS");
+	const hasTrackerOrg =
+		(env.TRACKER_CLOUD_ORG_ID?.trim() ?? "") ||
+		(env.TRACKER_ORG_ID?.trim() ?? "");
+	if (!hasTrackerOrg) {
+		missing.push("TRACKER_CLOUD_ORG_ID|TRACKER_ORG_ID");
+	}
+	return missing;
+}
+
 function resolveImageRetentionDays(env: Env) {
 	const value = Number.parseInt(env.IMAGE_RETENTION_DAYS ?? "7", 10);
 	return Number.isFinite(value) && value > 0 ? value : 7;
@@ -581,7 +596,10 @@ async function handleHealthCheck(env: Env): Promise<Response> {
 	// Check Sessions DO
 	try {
 		const start = Date.now();
-		const response = await callSessions(env, "/list", { limit: 1 });
+		const response = await withTimeout(
+			callSessions(env, "/list", { limit: 1 }),
+			2_000,
+		);
 		checks.sessions = {
 			status: response.ok ? "ok" : "error",
 			latencyMs: Date.now() - start,
@@ -593,7 +611,7 @@ async function handleHealthCheck(env: Env): Promise<Response> {
 	// Check Cron DO
 	try {
 		const start = Date.now();
-		const response = await callCron(env, "/list", {});
+		const response = await withTimeout(callCron(env, "/list", {}), 2_000);
 		checks.cron = {
 			status: response.ok ? "ok" : "error",
 			latencyMs: Date.now() - start,
@@ -605,7 +623,10 @@ async function handleHealthCheck(env: Env): Promise<Response> {
 	// Check Channels DO
 	try {
 		const start = Date.now();
-		const response = await callChannels(env, "/list", { limit: 1 });
+		const response = await withTimeout(
+			callChannels(env, "/list", { limit: 1 }),
+			2_000,
+		);
 		checks.channels = {
 			status: response.ok ? "ok" : "error",
 			latencyMs: Date.now() - start,
@@ -641,7 +662,7 @@ async function handleTelegramHealthCheck(env: Env): Promise<Response> {
 	const url = `https://api.telegram.org/bot${token}/getMe`;
 	try {
 		const start = Date.now();
-		const response = await withTimeout(fetch(url), 10_000);
+		const response = await withTimeout(fetch(url), 3_000);
 		const body = await response.text();
 		return new Response(
 			JSON.stringify({
@@ -745,6 +766,15 @@ export default {
 		if (request.method !== "POST") {
 			return toWorkerResponse(
 				new Response("Method Not Allowed", { status: 405 }),
+			);
+		}
+		const missingEnv = resolveRequiredBotEnv(effectiveEnv);
+		if (missingEnv.length > 0) {
+			return toWorkerResponse(
+				new Response(
+					JSON.stringify({ ok: false, error: "missing_env", missing: missingEnv }),
+					{ status: 500, headers: { "Content-Type": "application/json" } },
+				),
 			);
 		}
 		const update = await request.json();
