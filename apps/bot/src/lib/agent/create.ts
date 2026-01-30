@@ -1770,7 +1770,7 @@ export function createAgentToolsFactory(
 							description: goal,
 							enabled: true,
 							schedule,
-							sessionTarget: "main",
+							sessionTarget: "isolated",
 							wakeMode: "next-heartbeat",
 							payload: {
 								kind: "agentTurn",
@@ -1907,7 +1907,7 @@ export function createAgentToolsFactory(
 							description: goal,
 							enabled: true,
 							schedule,
-							sessionTarget: "main",
+							sessionTarget: "isolated",
 							wakeMode: "next-heartbeat",
 							payload: {
 								kind: "agentTurn",
