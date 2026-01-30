@@ -995,11 +995,13 @@ export function createAgentToolsFactory(
 							if (!resolvedKey) {
 								throw new Error("missing_file_key");
 							}
+							const safeDepth =
+								typeof depth === "number" ? Math.min(depth, 2) : depth;
 							return await deps.figmaClient.figmaFileGet({
 								fileKey: resolvedKey,
 								version,
 								ids,
-								depth,
+								depth: safeDepth,
 								geometry,
 								pluginData,
 								branchData,
@@ -1052,38 +1054,70 @@ export function createAgentToolsFactory(
 						pluginData,
 						branchData,
 					}) => {
+						const resolvedKey =
+							fileKey ?? (url ? extractFigmaFileKey(url) : null);
+						if (!resolvedKey) {
+							return { error: "missing_file_key" };
+						}
+						const safeDepth =
+							typeof depth === "number" ? Math.min(depth, 2) : depth;
+						const resolvedIds =
+							ids?.length && ids.length > 0
+								? ids
+								: nodeId
+									? [nodeId]
+									: url
+										? (() => {
+												const fromUrl = extractFigmaNodeId(url);
+												return fromUrl ? [fromUrl] : [];
+											})()
+										: [];
+						if (!resolvedIds.length) {
+							return { error: "missing_node_ids" };
+						}
 						try {
-							const resolvedKey =
-								fileKey ?? (url ? extractFigmaFileKey(url) : null);
-							if (!resolvedKey) {
-								throw new Error("missing_file_key");
-							}
-							const resolvedIds =
-								ids?.length && ids.length > 0
-									? ids
-									: nodeId
-										? [nodeId]
-										: url
-											? (() => {
-													const fromUrl = extractFigmaNodeId(url);
-													return fromUrl ? [fromUrl] : [];
-												})()
-											: [];
-							if (!resolvedIds.length) {
-								throw new Error("missing_node_ids");
-							}
 							return await deps.figmaClient.figmaFileNodesGet({
 								fileKey: resolvedKey,
 								ids: resolvedIds,
 								version,
-								depth,
+								depth: safeDepth,
 								geometry,
 								pluginData,
 								branchData,
 							});
 						} catch (error) {
+							const message = String(error);
+							if (
+								message.includes("AbortError") ||
+								message.includes("timeout")
+							) {
+								try {
+									await deps.figmaClient.figmaFileGet({
+										fileKey: resolvedKey,
+										version,
+										ids: resolvedIds,
+										depth: 1,
+										geometry,
+										pluginData,
+										branchData,
+									});
+									return await deps.figmaClient.figmaFileNodesGet({
+										fileKey: resolvedKey,
+										ids: resolvedIds,
+										version,
+										depth: 1,
+										geometry,
+										pluginData,
+										branchData,
+									});
+								} catch (fallbackError) {
+									deps.logDebug("figma_file_nodes_get fallback error", {
+										error: String(fallbackError),
+									});
+								}
+							}
 							deps.logDebug("figma_file_nodes_get error", {
-								error: String(error),
+								error: message,
 							});
 							return { error: String(error) };
 						}

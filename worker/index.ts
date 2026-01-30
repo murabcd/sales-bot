@@ -64,6 +64,7 @@ let imageCleanupEnsured: Promise<void> | null = null;
 
 type Env = Record<string, string | undefined> & {
 	UPDATES_DO: DurableObjectNamespace;
+	UPDATES_PROCESSOR_DO: DurableObjectNamespace;
 	GATEWAY_CONFIG_DO: DurableObjectNamespace;
 	SESSIONS_DO: DurableObjectNamespace;
 	CRON_DO: DurableObjectNamespace;
@@ -681,6 +682,40 @@ async function handleTelegramHealthCheck(env: Env): Promise<Response> {
 	}
 }
 
+async function handleFigmaHealthCheck(env: Env): Promise<Response> {
+	const token = env.FIGMA_TOKEN?.trim();
+	if (!token) {
+		return new Response(
+			JSON.stringify({ ok: false, error: "FIGMA_TOKEN is unset" }),
+			{ status: 500, headers: { "Content-Type": "application/json" } },
+		);
+	}
+	try {
+		const start = Date.now();
+		const response = await withTimeout(
+			fetch("https://api.figma.com/v1/me", {
+				headers: { "X-Figma-Token": token },
+			}),
+			3_000,
+		);
+		const body = await response.text();
+		return new Response(
+			JSON.stringify({
+				ok: response.ok,
+				status: response.status,
+				latencyMs: Date.now() - start,
+				body,
+			}),
+			{ status: response.ok ? 200 : 503, headers: { "Content-Type": "application/json" } },
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ ok: false, error: String(error) }),
+			{ status: 503, headers: { "Content-Type": "application/json" } },
+		);
+	}
+}
+
 export default {
 	async fetch(
 		request: WorkerRequest,
@@ -695,6 +730,9 @@ export default {
 
 		if (url.pathname === "/health/telegram") {
 			return toWorkerResponse(await handleTelegramHealthCheck(env));
+		}
+		if (url.pathname === "/health/figma") {
+			return toWorkerResponse(await handleFigmaHealthCheck(env));
 		}
 
 		if (url.pathname.startsWith("/media/") && request.method === "GET") {
@@ -843,6 +881,7 @@ type QueueItem = {
 	update: Update;
 	attempt: number;
 	nextAt: number;
+	lockedUntil?: number;
 };
 
 type StoredState = {
@@ -854,11 +893,12 @@ const MAX_ATTEMPTS = 5;
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 60_000;
 const PROCESSED_IDS_MAX = 1_000;
+const PROCESS_BUDGET_MS = 1_500;
+const QUEUE_LOCK_MS = 60_000;
 
 export class TelegramUpdatesDO implements DurableObject {
 	private state: DurableObjectState;
 	private env: Env;
-	private processing = false;
 
 	constructor(state: DurableObjectState, env: Env) {
 		this.state = state;
@@ -867,33 +907,99 @@ export class TelegramUpdatesDO implements DurableObject {
 
 	async fetch(request: WorkerRequest): Promise<WorkerResponse> {
 		const url = new URL(request.url);
-		if (url.pathname !== "/enqueue") {
-			return toWorkerResponse(new Response("Not found", { status: 404 }));
+		if (request.method === "POST" && url.pathname === "/enqueue") {
+			const update = await request.json();
+			if (!isTelegramUpdate(update)) {
+				return toWorkerResponse(new Response("Bad Request", { status: 400 }));
+			}
+			await this.enqueueUpdate(update);
+			logUpdateHandled("queued", update);
+			this.state.waitUntil(this.kickProcessor());
+			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
-		if (request.method !== "POST") {
+		if (request.method === "POST" && url.pathname === "/dequeue") {
+			const state = await this.loadState();
+			if (state.queue.length === 0) {
+				return toWorkerResponse(
+					new Response(JSON.stringify({ ok: false, nextAt: null }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					}),
+				);
+			}
+			const now = Date.now();
+			let bestIndex = -1;
+			let bestNextAt = Number.POSITIVE_INFINITY;
+			for (let i = 0; i < state.queue.length; i += 1) {
+				const candidate = state.queue[i];
+				if (!candidate) continue;
+				if (candidate.nextAt > now) continue;
+				if (candidate.lockedUntil && candidate.lockedUntil > now) continue;
+				if (candidate.nextAt < bestNextAt) {
+					bestNextAt = candidate.nextAt;
+					bestIndex = i;
+				}
+			}
+			const item = bestIndex >= 0 ? state.queue[bestIndex] : null;
+			if (!item) {
+				state.queue.sort((a, b) => a.nextAt - b.nextAt);
+				const nextItem = state.queue[0];
+				return toWorkerResponse(
+					new Response(
+						JSON.stringify({
+							ok: false,
+							nextAt: nextItem ? nextItem.nextAt : null,
+						}),
+						{
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+						},
+					),
+				);
+			}
+			item.lockedUntil = now + QUEUE_LOCK_MS;
+			await this.saveState(state);
 			return toWorkerResponse(
-				new Response("Method Not Allowed", { status: 405 }),
+				new Response(JSON.stringify({ ok: true, item }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
 			);
 		}
-		const update = await request.json();
-		if (!isTelegramUpdate(update)) {
-			return toWorkerResponse(new Response("Bad Request", { status: 400 }));
-		}
-		if (isCallbackUpdate(update)) {
-			const handled = await this.tryHandleCallback(update);
-			if (handled) {
-				logUpdateHandled("callback_fastpath", update);
-				return toWorkerResponse(new Response("OK", { status: 200 }));
+		if (request.method === "POST" && url.pathname === "/requeue") {
+			const body = (await request.json()) as QueueItem;
+			if (!body?.id || !body.update) {
+				return toWorkerResponse(new Response("Bad Request", { status: 400 }));
 			}
+			const state = await this.loadState();
+			const existing = state.queue.find((item) => item.id === body.id);
+			if (existing) {
+				existing.attempt = body.attempt;
+				existing.nextAt = body.nextAt;
+				existing.lockedUntil = undefined;
+			} else {
+				state.queue.push({ ...body, lockedUntil: undefined });
+			}
+			await this.saveState(state);
+			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
-		await this.enqueueUpdate(update);
-		logUpdateHandled("queued", update);
-		this.state.waitUntil(this.processQueue());
-		return toWorkerResponse(new Response("OK", { status: 200 }));
-	}
-
-	async alarm(): Promise<void> {
-		await this.processQueue();
+		if (request.method === "POST" && url.pathname === "/processed") {
+			const body = (await request.json()) as { id?: string };
+			if (!body?.id) {
+				return toWorkerResponse(new Response("Bad Request", { status: 400 }));
+			}
+			const state = await this.loadState();
+			state.queue = state.queue.filter((item) => item.id !== body.id);
+			state.processedIds.push(body.id);
+			if (state.processedIds.length > PROCESSED_IDS_MAX) {
+				state.processedIds = state.processedIds.slice(
+					-state.processedIds.length + PROCESSED_IDS_MAX,
+				);
+			}
+			await this.saveState(state);
+			return toWorkerResponse(new Response("OK", { status: 200 }));
+		}
+		return toWorkerResponse(new Response("Not found", { status: 404 }));
 	}
 
 	private async loadState(): Promise<StoredState> {
@@ -928,160 +1034,12 @@ export class TelegramUpdatesDO implements DurableObject {
 		});
 		await this.saveState(state);
 	}
-
-	private async tryHandleCallback(update: Update) {
-		const updateId =
-			typeof update.update_id === "number" ? String(update.update_id) : null;
-		const state = await this.loadState();
-		let startedAt: number | null = null;
-		if (updateId) {
-			if (state.processedIds.includes(updateId)) return true;
-			if (state.queue.some((item) => item.id === updateId)) return true;
-		}
-
-		try {
-			const runtime = await getBot(this.env);
-			const channel = await touchTelegramChannel(this.env, update);
-			if (!channel.enabled) return true;
-			if (channel.config) {
-				(update as Update & { __channelConfig?: unknown }).__channelConfig =
-					channel.config;
-			}
-			startedAt = Date.now();
-			logBotInvocation("bot_invocation_start", update, {
-				route: "callback_fastpath",
-				stream: false,
-			});
-			await runtime.bot.handleUpdate(update);
-			await touchTelegramSession(this.env, update);
-			logBotInvocation("bot_invocation_end", update, {
-				route: "callback_fastpath",
-				stream: false,
-				status: "ok",
-				elapsed_ms: startedAt ? Date.now() - startedAt : null,
-			});
-			if (updateId) {
-				state.processedIds.push(updateId);
-				if (state.processedIds.length > PROCESSED_IDS_MAX) {
-					state.processedIds = state.processedIds.slice(
-						-state.processedIds.length + PROCESSED_IDS_MAX,
-					);
-				}
-				await this.saveState(state);
-			}
-			return true;
-		} catch (error) {
-			logBotInvocation("bot_invocation_end", update, {
-				route: "callback_fastpath",
-				stream: false,
-				status: "error",
-				error: String(error),
-				elapsed_ms: startedAt ? Date.now() - startedAt : null,
-			});
-			console.error("telegram_update_error", error);
-			return false;
-		}
+	private async kickProcessor() {
+		const id =
+			this.env.UPDATES_PROCESSOR_DO.idFromName("telegram-updates-processor");
+		const stub = this.env.UPDATES_PROCESSOR_DO.get(id);
+		await stub.fetch("https://do/process", { method: "POST" });
 	}
-
-	private async processQueue(): Promise<void> {
-		if (this.processing) return;
-		this.processing = true;
-		try {
-			const runtime = await getBot(this.env);
-			const state = await this.loadState();
-
-			while (state.queue.length > 0) {
-				state.queue.sort((a, b) => a.nextAt - b.nextAt);
-				const item = state.queue[0];
-				if (!item) break;
-				if (item.nextAt > Date.now()) {
-					await this.state.storage.setAlarm(item.nextAt);
-					break;
-				}
-
-				state.queue.shift();
-				let startedAt: number | null = null;
-				try {
-					const channel = await touchTelegramChannel(this.env, item.update);
-					if (!channel.enabled) {
-						state.processedIds.push(item.id);
-						if (state.processedIds.length > PROCESSED_IDS_MAX) {
-							state.processedIds = state.processedIds.slice(
-								-state.processedIds.length + PROCESSED_IDS_MAX,
-							);
-						}
-						await this.saveState(state);
-						logBotInvocation("bot_invocation_end", item.update, {
-							route: "processed",
-							stream: false,
-							status: "skipped",
-							reason: "channel_disabled",
-							elapsed_ms: 0,
-						});
-						logUpdateHandled("processed", item.update);
-						continue;
-					}
-					if (channel.config) {
-						(
-							item.update as Update & { __channelConfig?: unknown }
-						).__channelConfig = channel.config;
-					}
-					startedAt = Date.now();
-					logBotInvocation("bot_invocation_start", item.update, {
-						route: "processed",
-						stream: false,
-					});
-					await runtime.bot.handleUpdate(item.update);
-					await touchTelegramSession(this.env, item.update);
-					logBotInvocation("bot_invocation_end", item.update, {
-						route: "processed",
-						stream: false,
-						status: "ok",
-						elapsed_ms: startedAt ? Date.now() - startedAt : null,
-					});
-					state.processedIds.push(item.id);
-					if (state.processedIds.length > PROCESSED_IDS_MAX) {
-						state.processedIds = state.processedIds.slice(
-							-state.processedIds.length + PROCESSED_IDS_MAX,
-						);
-					}
-					await this.saveState(state);
-					logUpdateHandled("processed", item.update);
-				} catch (error) {
-					logBotInvocation("bot_invocation_end", item.update, {
-						route: "processed",
-						stream: false,
-						status: "error",
-						error: String(error),
-						elapsed_ms: startedAt ? Date.now() - startedAt : null,
-					});
-					console.error("telegram_update_error", error);
-					item.attempt += 1;
-					if (item.attempt >= MAX_ATTEMPTS) {
-						await this.saveState(state);
-						continue;
-					}
-					const delay = Math.min(
-						RETRY_BASE_MS * 2 ** (item.attempt - 1),
-						RETRY_MAX_MS,
-					);
-					item.nextAt = Date.now() + delay;
-					state.queue.push(item);
-					await this.saveState(state);
-					await this.state.storage.setAlarm(item.nextAt);
-					break;
-				}
-			}
-		} finally {
-			this.processing = false;
-		}
-	}
-}
-
-function isCallbackUpdate(
-	update: Update,
-): update is Update & { callback_query: unknown } {
-	return "callback_query" in update;
 }
 
 function logUpdateHandled(
@@ -1107,6 +1065,143 @@ function logUpdateHandled(
 			update_type: updateType,
 		}),
 	);
+}
+
+export class TelegramUpdatesProcessorDO implements DurableObject {
+	private state: DurableObjectState;
+	private env: Env;
+	private processing = false;
+
+	constructor(state: DurableObjectState, env: Env) {
+		this.state = state;
+		this.env = env;
+	}
+
+	async fetch(request: WorkerRequest): Promise<WorkerResponse> {
+		const url = new URL(request.url);
+		if (request.method === "POST" && url.pathname === "/process") {
+			this.state.waitUntil(this.processQueue());
+			return toWorkerResponse(new Response("OK", { status: 200 }));
+		}
+		return toWorkerResponse(new Response("Not found", { status: 404 }));
+	}
+
+	async alarm(): Promise<void> {
+		await this.processQueue();
+	}
+
+	private async dequeue(): Promise<
+		{ ok: true; item: QueueItem } | { ok: false; nextAt: number | null }
+	> {
+		const id = this.env.UPDATES_DO.idFromName("telegram-updates");
+		const stub = this.env.UPDATES_DO.get(id);
+		const response = await stub.fetch("https://do/dequeue", { method: "POST" });
+		return (await response.json()) as
+			| { ok: true; item: QueueItem }
+			| { ok: false; nextAt: number | null };
+	}
+
+	private async markProcessed(id: string) {
+		const stub = this.env.UPDATES_DO.get(
+			this.env.UPDATES_DO.idFromName("telegram-updates"),
+		);
+		await stub.fetch("https://do/processed", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ id }),
+		});
+	}
+
+	private async requeue(item: QueueItem) {
+		const stub = this.env.UPDATES_DO.get(
+			this.env.UPDATES_DO.idFromName("telegram-updates"),
+		);
+		await stub.fetch("https://do/requeue", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(item),
+		});
+	}
+
+	private async processQueue(): Promise<void> {
+		if (this.processing) return;
+		this.processing = true;
+		const startedAt = Date.now();
+		try {
+			const runtime = await getBot(this.env);
+
+			while (Date.now() - startedAt < PROCESS_BUDGET_MS) {
+				const dequeued = await this.dequeue();
+				if (!dequeued.ok) {
+					if (dequeued.nextAt) {
+						await this.state.storage.setAlarm(dequeued.nextAt);
+					}
+					break;
+				}
+				const item = dequeued.item;
+				let startedItemAt: number | null = null;
+				try {
+					const channel = await touchTelegramChannel(this.env, item.update);
+					if (!channel.enabled) {
+						await this.markProcessed(item.id);
+						logBotInvocation("bot_invocation_end", item.update, {
+							route: "processed",
+							stream: false,
+							status: "skipped",
+							reason: "channel_disabled",
+							elapsed_ms: 0,
+						});
+						logUpdateHandled("processed", item.update);
+						continue;
+					}
+					if (channel.config) {
+						(
+							item.update as Update & { __channelConfig?: unknown }
+						).__channelConfig = channel.config;
+					}
+					startedItemAt = Date.now();
+					logBotInvocation("bot_invocation_start", item.update, {
+						route: "processed",
+						stream: false,
+					});
+					await runtime.bot.handleUpdate(item.update);
+					await touchTelegramSession(this.env, item.update);
+					logBotInvocation("bot_invocation_end", item.update, {
+						route: "processed",
+						stream: false,
+						status: "ok",
+						elapsed_ms: startedItemAt ? Date.now() - startedItemAt : null,
+					});
+					await this.markProcessed(item.id);
+					logUpdateHandled("processed", item.update);
+				} catch (error) {
+					logBotInvocation("bot_invocation_end", item.update, {
+						route: "processed",
+						stream: false,
+						status: "error",
+						error: String(error),
+						elapsed_ms: startedItemAt ? Date.now() - startedItemAt : null,
+					});
+					console.error("telegram_update_error", error);
+					item.attempt += 1;
+					if (item.attempt >= MAX_ATTEMPTS) {
+						await this.markProcessed(item.id);
+						continue;
+					}
+					const delay = Math.min(
+						RETRY_BASE_MS * 2 ** (item.attempt - 1),
+						RETRY_MAX_MS,
+					);
+					item.nextAt = Date.now() + delay;
+					await this.requeue(item);
+					await this.state.storage.setAlarm(item.nextAt);
+					break;
+				}
+			}
+		} finally {
+			this.processing = false;
+		}
+	}
 }
 
 function logBotInvocation(

@@ -44,7 +44,7 @@ export function createFigmaClient(config: FigmaClientConfig): FigmaClient {
 	function figmaHeaders(): Record<string, string> {
 		return {
 			Accept: "application/json",
-			Authorization: `Bearer ${config.token}`,
+			"X-Figma-Token": config.token,
 		};
 	}
 
@@ -73,32 +73,47 @@ export function createFigmaClient(config: FigmaClientConfig): FigmaClient {
 			timeoutMs?: number;
 		} = {},
 	): Promise<T> {
-		const controller = new AbortController();
 		const timeoutMs = options.timeoutMs ?? 8_000;
-		const timeout = setTimeout(() => controller.abort(), timeoutMs);
-		try {
-			const init: RequestInit = {
-				method,
-				headers: figmaHeaders(),
-				signal: controller.signal,
-			};
-			const url = buildFigmaUrl(pathname, options.query);
-			const response = await fetch(url, init);
-			const text = await response.text();
-			if (!response.ok) {
-				throw new Error(
-					`figma_error:${response.status}:${response.statusText}:${text}`,
-				);
-			}
-			if (!text.trim()) return undefined as T;
+		const maxAttempts = 3;
+		let lastError: unknown = null;
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), timeoutMs);
 			try {
-				return JSON.parse(text) as T;
-			} catch {
-				return text as T;
+				const init: RequestInit = {
+					method,
+					headers: figmaHeaders(),
+					signal: controller.signal,
+				};
+				const url = buildFigmaUrl(pathname, options.query);
+				const response = await fetch(url, init);
+				const text = await response.text();
+				if (!response.ok) {
+					throw new Error(
+						`figma_error:${response.status}:${response.statusText}:${text}`,
+					);
+				}
+				if (!text.trim()) return undefined as T;
+				try {
+					return JSON.parse(text) as T;
+				} catch {
+					return text as T;
+				}
+			} catch (error) {
+				lastError = error;
+				const message = String(error);
+				const shouldRetry =
+					message.includes("AbortError") || message.includes("timeout");
+				if (!shouldRetry || attempt >= maxAttempts) {
+					throw error;
+				}
+				const delayMs = 250 * 2 ** (attempt - 1);
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+			} finally {
+				clearTimeout(timeout);
 			}
-		} finally {
-			clearTimeout(timeout);
 		}
+		throw lastError ?? new Error("figma_request_failed");
 	}
 
 	async function figmaMe(options?: { timeoutMs?: number }) {

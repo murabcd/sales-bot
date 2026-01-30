@@ -27,9 +27,11 @@ export function DashboardChat({
 	children,
 }: DashboardChatProps) {
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLDivElement>(null);
 	const router = useRouter();
 	const { streamChat, abortChat, config } = useGateway();
 	const [hasSentPending, setHasSentPending] = useState(false);
+	const [inputHeight, setInputHeight] = useState(0);
 
 	// Generate a chat ID if not provided
 	const chatId = useMemo(() => routeChatId ?? generateId(), [routeChatId]);
@@ -47,6 +49,23 @@ export function DashboardChat({
 	const isLoading = status === "streaming" || status === "submitted";
 	const hasMessages = messages.length > 0;
 	const messagesLength = messages.length;
+
+	const getScrollViewport = useCallback(() => {
+		return scrollRef.current?.querySelector<HTMLElement>(
+			"[data-radix-scroll-area-viewport]",
+		);
+	}, []);
+
+	useEffect(() => {
+		if (!inputRef.current) return;
+		const observer = new ResizeObserver((entries) => {
+			const entry = entries[0];
+			if (!entry) return;
+			setInputHeight(entry.contentRect.height);
+		});
+		observer.observe(inputRef.current);
+		return () => observer.disconnect();
+	}, []);
 
 	// Send pending message after navigation to chat page
 	useEffect(() => {
@@ -68,10 +87,11 @@ export function DashboardChat({
 	// Auto-scroll to bottom when new messages arrive
 	// biome-ignore lint/correctness/useExhaustiveDependencies: messagesLength is intentionally used to trigger scroll on new messages
 	useEffect(() => {
-		if (scrollRef.current && hasMessages) {
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		const viewport = getScrollViewport();
+		if (viewport && hasMessages) {
+			viewport.scrollTop = viewport.scrollHeight;
 		}
-	}, [messagesLength, hasMessages]);
+	}, [messagesLength, hasMessages, getScrollViewport]);
 
 	const handleSubmit = useCallback(
 		async (message: PromptInputMessage & { webSearchEnabled?: boolean }) => {
@@ -97,6 +117,10 @@ export function DashboardChat({
 	);
 
 	const defaultWebSearchEnabled = config.WEB_SEARCH_ENABLED === "1";
+	const contentPaddingBottom =
+		inputHeight > 0
+			? `calc(${inputHeight}px + 1rem + env(safe-area-inset-bottom))`
+			: "7rem";
 
 	return (
 		<div className="relative flex flex-col h-[calc(100dvh-56px)] md:h-[calc(100vh-56px-48px)] -mx-4 -mb-4 md:-mx-6 md:-mb-6">
@@ -105,20 +129,31 @@ export function DashboardChat({
 				{hasMessages ? (
 					// Chat view - show messages
 					<ScrollArea className="h-full" ref={scrollRef}>
-						<div className="max-w-2xl mx-auto w-full px-4 py-6 pb-28">
+						<div
+							className="max-w-2xl mx-auto w-full px-4 py-6"
+							style={{ paddingBottom: contentPaddingBottom }}
+						>
 							<ChatMessages messages={messages} isLoading={isLoading} />
 						</div>
 					</ScrollArea>
 				) : (
 					// Home view - show widgets
 					<ScrollArea className="h-full">
-						<div className="px-4 pt-0 pb-28 md:px-6">{children}</div>
+						<div
+							className="px-4 pt-0 md:px-6"
+							style={{ paddingBottom: contentPaddingBottom }}
+						>
+							{children}
+						</div>
 					</ScrollArea>
 				)}
 			</div>
 
 			{/* Sticky chat input at bottom - positioned within this container */}
-			<div className="absolute bottom-0 left-0 right-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:pb-0">
+			<div
+				className="absolute bottom-0 left-0 right-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:pb-0"
+				ref={inputRef}
+			>
 				<div className="max-w-2xl mx-auto w-full px-4 pt-4 pb-0">
 					<ChatInput
 						defaultWebSearchEnabled={defaultWebSearchEnabled}

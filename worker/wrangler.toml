@@ -5,7 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ALLOWED_TG_GROUPS = "-1002020976796"
-ALLOWED_TG_IDS = "187873791,8017190401,8121252687,396261652,799083028,8092742155,8002966531,885404554,241569179,8099465395,7933987991,7668989544,400245877,143810424,231772128,611542587,138724443,377852977"
+ALLOWED_TG_IDS = "187873791,8017190401,8121252687,396261652,799083028,8092742155,8002966531,885404554,241569179,8099465395,7933987991,7668989544,400245877,143810424,231772128,611542587,138724443,377852977,396261652,922025129"
 PUBLIC_BASE_URL="https://omni.yt-sales-bot.workers.dev"
 COMMENTS_FETCH_CONCURRENCY="2"
 IMAGE_RETENTION_DAYS="7"
@@ -48,6 +48,10 @@ enabled = true
 [[durable_objects.bindings]]
 name = "UPDATES_DO"
 class_name = "TelegramUpdatesDO"
+
+[[durable_objects.bindings]]
+name = "UPDATES_PROCESSOR_DO"
+class_name = "TelegramUpdatesProcessorDO"
 
 [[durable_objects.bindings]]
 name = "CHANNELS_DO"
@@ -93,3 +97,7 @@ new_sqlite_classes = ["WikiIndexDO"]
 [[migrations]]
 tag = "v6"
 deleted_classes = ["WikiIndexDO"]
+
+[[migrations]]
+tag = "v7"
+new_sqlite_classes = ["TelegramUpdatesProcessorDO"]

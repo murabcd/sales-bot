@@ -16,6 +16,12 @@ Set these in your runtime environment or Cloudflare dashboard:
 
 If this is missing, Figma tools are not registered.
 
+## Auth + reliability notes
+
+- The bot uses the `X-Figma-Token` header (Figma PATs do not work with `Authorization: Bearer`).
+- Large files can time out. The bot caps `depth` to 2 and retries on abort/timeout errors.
+  If a request still fails, it falls back to a shallow `depth=1` fetch before retrying nodes.
+
 ## Tools
 
 - `figma_me` — get current user profile.
